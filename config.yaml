@@ -14,6 +14,7 @@ whisper:
   compute_type: "int8"   # cpu: int8 ; gpu: float16
   language: de           # null = autodetect, or "en"/"de"
   cpu_threads: 1         # 1 thread leaves a CPU free so the web UI stays responsive
+  chunk_seconds: 1800    # transcribe in 30-min chunks → bounded RAM on long VODs
 
 analyze:
   model: "claude-sonnet-4-6"

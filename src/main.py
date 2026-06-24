@@ -48,6 +48,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         compute_type=w.get("compute_type", "int8"),
         language=w.get("language"),
         cpu_threads=w.get("cpu_threads", 2),
+        chunk_seconds=w.get("chunk_seconds", 1800),
     )
     console.print(f"{len(segments)} segments")
 
