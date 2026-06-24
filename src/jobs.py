@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from rich.console import Console
-
-from . import main as pipeline
-from .config import data_dir, load_config
-from .settings_store import apply_settings
+from .config import data_dir
 
 
 @dataclass
@@ -116,22 +115,40 @@ class JobManager:
         return job
 
     def _run(self, job: Job) -> None:
+        """Run the pipeline as a separate, niced subprocess.
+
+        Decoupling the CPU-heavy work (Whisper/ffmpeg) from the web process and
+        running it at `nice -n 19` keeps uvicorn responsive: the scheduler gives
+        the niced job whatever CPU is left after the web server, instead of the
+        in-process worker starving the event loop.
+        """
         job.status = "running"
         self._persist()
-        console = Console(file=job._buf, force_terminal=False, width=100)
+        cmd = ["nice", "-n", "19", "python", "-u", "-m", "src.main", "run", "--vod", job.vod]
+        if job.no_upload:
+            cmd.append("--no-upload")
+        last_persist = 0.0
         try:
-            apply_settings()                 # pull latest UI settings into env
-            cfg = load_config()
-            rc = pipeline.run_pipeline(
-                job.vod, cfg, no_upload=job.no_upload, console=console
+            proc = subprocess.Popen(
+                cmd, cwd="/app", env={**os.environ},
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
             )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                job._buf.write(line)
+                now = time.monotonic()
+                if now - last_persist > 3.0:   # throttle log persistence
+                    last_persist = now
+                    self._persist()
+            rc = proc.wait()
             job.status = "done" if rc == 0 else "error"
             if rc != 0:
                 job.error = f"pipeline exit code {rc}"
         except Exception as e:  # noqa: BLE001
             job.status = "error"
             job.error = str(e)
-            console.print(f"[red]EXCEPTION: {e}")
+            job._buf.write(f"EXCEPTION: {e}\n")
         finally:
             job.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self._persist()  # final state + full log

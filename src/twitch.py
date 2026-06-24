@@ -121,6 +121,7 @@ def download_vod(info: VodInfo, out_dir: Path, fmt: str = "best", reuse: bool = 
     cmd = [
         "yt-dlp",
         "-f", fmt,
+        "--no-progress",          # keep the job log readable (no per-fragment spam)
         "--merge-output-format", "mp4",
         "-o", str(target),
         info.url,
