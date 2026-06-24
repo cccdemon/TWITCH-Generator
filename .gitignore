@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Media artifacts
+*.mp4
+*.mkv
+*.ts

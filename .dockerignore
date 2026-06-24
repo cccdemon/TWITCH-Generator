@@ -1,0 +1,10 @@
+data/
+.env
+.git/
+__pycache__/
+*.pyc
+*.mp4
+*.mkv
+*.ts
+.venv/
+venv/

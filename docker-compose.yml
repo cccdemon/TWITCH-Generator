@@ -1,0 +1,28 @@
+services:
+  twitch-generator:
+    build: .
+    image: twitch-generator:latest
+    env_file:
+      - .env
+    ports:
+      - "9443:9443"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+      # Mount Whisper model cache so it isn't re-downloaded each run.
+      - whisper-cache:/root/.cache/huggingface
+    # Default: web UI on http://localhost:8000 . Run a one-off CLI job instead with:
+    #   docker compose run --rm twitch-generator run --vod <url>
+    command: ["web"]
+
+    # GPU Whisper: uncomment, use a CUDA base image, set whisper.device=cuda.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  whisper-cache:

@@ -1,0 +1,44 @@
+# Production overlay for co-hosting on the RDOC-Suite box (LXC 103).
+#
+# This is a SEPARATE compose project living at /opt/TWITCH-Generator (same pattern
+# as RDOC-LRC / SquadLink). It does NOT terminate TLS. The RDOC-Suite `caddy-rdoc`
+# container (host network, listening on :9443) fronts it:
+#
+#   suite.raumdock.org:9443/vod  ->  reverse_proxy 127.0.0.1:9444   (this service)
+#
+# The route block lives in RDOC-Suite/deploy/caddy-rdoc/Caddyfile. Because Caddy
+# strips the /vod prefix, the app runs with ROOT_PATH=/vod so its links carry it.
+#
+# Bring up:  docker compose -f docker-compose.prod.yml up -d --build
+services:
+  vod:
+    build: .
+    image: twitch-generator:latest
+    container_name: twitch-generator
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROOT_PATH: "/vod"
+      WEB_PORT: "9443"
+    # Loopback only — Caddy (host network) proxies /vod here. Never expose publicly;
+    # the suite front door + login is the only entry point. Host 9444 -> container 9443
+    # (host :9443 is already owned by the suite Caddy).
+    ports:
+      - "127.0.0.1:9444:9443"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+      - whisper-cache:/root/.cache/huggingface
+
+    # GPU Whisper: use a CUDA base image, set whisper.device=cuda in config.yaml,
+    # and uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  whisper-cache:

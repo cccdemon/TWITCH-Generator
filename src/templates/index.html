@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TWITCH-Generator</title>
+<style>
+  :root { --bg:#0e0e12; --card:#1a1a22; --line:#2a2a35; --fg:#e6e6ea; --mut:#9a9aa8; --acc:#9146ff; --ok:#3ecf8e; --err:#ff5470; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; }
+  header .dot { color:var(--acc); }
+  main { max-width:980px; margin:0 auto; padding:24px; display:grid; gap:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+  .card h2 { margin:0 0 14px; font-size:15px; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); }
+  label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  input[type=text], input[type=password] { width:100%; padding:9px 11px; background:#11111a; border:1px solid var(--line); border-radius:8px; color:var(--fg); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px 18px; }
+  button { background:var(--acc); color:#fff; border:0; padding:10px 16px; border-radius:8px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .msg { background:#16223a; border:1px solid #244; color:#bfe; padding:10px 14px; border-radius:8px; }
+  .warn { background:#3a1620; border:1px solid #633; color:#fbc; padding:10px 14px; border-radius:8px; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
+  .set { color:var(--ok); border-color:#264; } .unset { color:var(--err); border-color:#633; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+  .vod { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--line); }
+  .vod small { color:var(--mut); }
+  a { color:var(--acc); }
+  .st-done{color:var(--ok)} .st-error{color:var(--err)} .st-running{color:#ffcc66} .st-queued{color:var(--mut)}
+  .muted { color:var(--mut); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot">●</span><h1>TWITCH-Generator</h1>
+  <span style="flex:1"></span>
+  <span class="muted">{{ user }}</span>
+  <a href="{{ base }}/logout" class="muted">logout</a>
+</header>
+<main>
+
+  {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+  {% if not users_configured %}<div class="warn">No USERS configured — set USERS in .env (e.g. <code>admin:password</code>) and restart.</div>{% endif %}
+
+  <!-- SETTINGS -->
+  <section class="card">
+    <h2>Settings (.env values)</h2>
+    <form method="post" action="{{ base }}/settings" enctype="multipart/form-data">
+      <div class="grid2">
+        {% for s in settings %}
+        <div>
+          <label>{{ s.label }}
+            {% if s.is_set %}<span class="badge set">set</span>{% else %}<span class="badge unset">empty</span>{% endif %}
+          </label>
+          {% if s.secret %}
+            <input type="password" name="{{ s.key }}" placeholder="{{ '•••• (leave blank to keep)' if s.is_set else 'enter value' }}">
+          {% else %}
+            <input type="text" name="{{ s.key }}" value="{{ s.value }}">
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <label style="margin-top:14px">YouTube client_secret.json (upload, optional)</label>
+      <input type="file" name="youtube_secret_file" accept="application/json">
+      <div class="row" style="margin-top:16px"><button type="submit">Save settings</button></div>
+    </form>
+  </section>
+
+  <!-- VOD SELECTION -->
+  <section class="card">
+    <h2>Select VODs</h2>
+    <form method="post" action="{{ base }}/vods" class="row">
+      <input type="text" name="login" placeholder="Twitch streamer login (e.g. xqc)" style="flex:1">
+      <button type="submit" class="ghost">List VODs</button>
+    </form>
+
+    <form method="post" action="{{ base }}/jobs" style="margin-top:16px">
+      {% if vods %}
+        {% for v in vods %}
+        <label class="vod">
+          <input type="checkbox" name="vod" value="{{ v.url }}" style="margin-top:4px">
+          <span><strong>{{ v.title or v.vod_id }}</strong><br>
+            <small>{{ v.streamer }} · {{ (v.duration/60)|round(0,'floor')|int }} min · id {{ v.vod_id }}</small>
+          </span>
+        </label>
+        {% endfor %}
+      {% else %}
+        <p class="muted">Search a streamer above, or paste a VOD url/id directly:</p>
+      {% endif %}
+
+      <label style="margin-top:12px">Direct VOD url or id (optional)</label>
+      <input type="text" name="direct_vod" placeholder="https://www.twitch.tv/videos/123456789">
+
+      <div class="row" style="margin-top:16px">
+        <label class="row" style="margin:0"><input type="checkbox" name="no_upload"> render only, skip upload</label>
+        <button type="submit">Start processing</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- JOBS -->
+  <section class="card">
+    <h2>Jobs</h2>
+    <table id="jobs">
+      <thead><tr><th>ID</th><th>VOD</th><th>Status</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td>{{ j.id }}</td>
+          <td>{{ j.title or j.vod }}</td>
+          <td class="st-{{ j.status }}">{{ j.status }}{% if j.error %} <small>({{ j.error }})</small>{% endif %}</td>
+          <td class="muted">{{ j.created }}</td>
+          <td><a href="{{ base }}/jobs/{{ j.id }}">log</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No jobs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const BASE = "{{ base }}";
+// Light auto-refresh of the jobs table while anything is running.
+async function refresh() {
+  try {
+    const r = await fetch(`${BASE}/api/jobs`); if (!r.ok) return;
+    const jobs = await r.json();
+    const busy = jobs.some(j => j.status === 'running' || j.status === 'queued');
+    const tb = document.querySelector('#jobs tbody');
+    tb.innerHTML = jobs.length ? jobs.map(j =>
+      `<tr><td>${j.id}</td><td>${j.title||j.vod}</td>`+
+      `<td class="st-${j.status}">${j.status}${j.error?` <small>(${j.error})</small>`:''}</td>`+
+      `<td class="muted">${j.created}</td><td><a href="${BASE}/jobs/${j.id}">log</a></td></tr>`
+    ).join('') : '<tr><td colspan="5" class="muted">No jobs yet.</td></tr>';
+    if (busy) setTimeout(refresh, 3000);
+  } catch (e) {}
+}
+refresh();
+</script>
+</body>
+</html>

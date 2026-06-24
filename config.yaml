@@ -1,0 +1,71 @@
+# TWITCH-Generator pipeline config. Env vars hold secrets; this holds tunables.
+
+download:
+  # yt-dlp format. "best" or e.g. "720p". Lower = faster transcode/clip.
+  format: "best"
+  # Skip re-download if VOD file already present in data dir.
+  reuse_existing: true
+
+whisper:
+  model: "large-v3"      # tiny|base|small|medium|large-v3 (smaller = faster, less accurate)
+  device: "cpu"          # "cuda" with a GPU image
+  compute_type: "int8"   # cpu: int8 ; gpu: float16
+  language: de         # null = autodetect, or "en"/"de"
+
+analyze:
+  model: "claude-sonnet-4-6"
+  max_clips: 10
+  # Target clip length window (seconds) for short-form vertical.
+  min_clip_seconds: 15
+  max_clip_seconds: 30
+  # Categories the LLM scores for.
+  categories:
+    - funny
+    - emotional
+    - exciting
+    - skillful
+
+# Video signal — Claude Vision scores sampled frames (Star Citizen is visual).
+vision:
+  enabled: true
+  interval_seconds: 30       # one frame every N seconds
+  model: "claude-sonnet-4-6" # must be vision-capable
+  frame_width: 768           # downscale to save tokens
+  max_frames_per_call: 12    # frames per Claude request
+  highlight_threshold: 0.5   # min visual_score to start a vision-only clip
+  categories:
+    - action
+    - pvp
+    - explosion
+    - ship_damage
+    - landing
+    - bug
+
+# Audio signal — loudness peaks (explosions, shouting) via ffmpeg ebur128.
+audio:
+  enabled: true
+
+# Fusion — highlight = wA*audio + wT*text + wV*video (weights auto-normalized).
+score:
+  weights:
+    audio: 0.25
+    text: 0.35
+    video: 0.40
+
+clip:
+  # Output to 9:16 vertical for Shorts/Reels/TikTok. false = keep source aspect.
+  vertical: true
+  width: 1080
+  height: 1920
+  # Pad seconds added before/after the LLM-marked window.
+  pad_start: 1.0
+  pad_end: 1.0
+  burn_subtitles: true
+
+upload:
+  # Platforms to attempt. Remove ones you don't use.
+  platforms:
+    - youtube
+    - tiktok
+    - instagram
+  privacy: "public"   # youtube: private|unlisted|public

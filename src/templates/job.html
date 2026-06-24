@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job {{ job.id }} — TWITCH-Generator</title>
+<style>
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:#0e0e12; color:#e6e6ea; }
+  header { padding:18px 24px; border-bottom:1px solid #2a2a35; display:flex; gap:14px; align-items:center; }
+  a { color:#9146ff; } main { max-width:980px; margin:0 auto; padding:24px; }
+  pre { background:#11111a; border:1px solid #2a2a35; border-radius:10px; padding:16px; overflow:auto; white-space:pre-wrap; max-height:70vh; }
+  .st-done{color:#3ecf8e} .st-error{color:#ff5470} .st-running{color:#ffcc66} .st-queued{color:#9a9aa8}
+  .muted{color:#9a9aa8}
+</style>
+</head>
+<body>
+<header><a href="{{ base }}/">← back</a><strong>Job {{ job.id }}</strong>
+  <span id="status" class="st-{{ job.status }}">{{ job.status }}</span>
+  <span class="muted">{{ job.title or job.vod }}</span>
+</header>
+<main>
+  <pre id="log">{{ job.log }}</pre>
+</main>
+<script>
+const id = "{{ job.id }}";
+const BASE = "{{ base }}";
+async function poll() {
+  try {
+    const r = await fetch(`${BASE}/api/jobs/${id}/log`); if (!r.ok) return;
+    const d = await r.json();
+    const log = document.getElementById('log');
+    log.textContent = d.log + (d.error ? `\nERROR: ${d.error}` : '');
+    const st = document.getElementById('status');
+    st.textContent = d.status; st.className = 'st-' + d.status;
+    if (d.status === 'running' || d.status === 'queued') setTimeout(poll, 2000);
+  } catch (e) {}
+}
+poll();
+</script>
+</body>
+</html>
