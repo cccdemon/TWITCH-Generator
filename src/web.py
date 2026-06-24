@@ -81,7 +81,7 @@ def login_form(request: Request, error: str | None = None) -> HTMLResponse:
     if request.session.get("user"):
         return RedirectResponse(f"{BASE}/", status_code=303)
     return _TEMPLATES.TemplateResponse(
-        "login.html", {"request": request, "base": BASE, "error": error}
+        request, "login.html", {"base": BASE, "error": error}
     )
 
 
@@ -93,8 +93,9 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         request.session["user"] = username.strip()
         return RedirectResponse(f"{BASE}/", status_code=303)
     return _TEMPLATES.TemplateResponse(
+        request,
         "login.html",
-        {"request": request, "base": BASE, "error": "Invalid credentials"},
+        {"base": BASE, "error": "Invalid credentials"},
         status_code=401,
     )
 
@@ -108,9 +109,9 @@ def logout(request: Request) -> RedirectResponse:
 # ---------------------------------------------------------------- main views ---
 def _render(request: Request, vods=None, message: str | None = None) -> HTMLResponse:
     return _TEMPLATES.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "base": BASE,
             "user": request.session.get("user"),
             "settings": current_view(),
@@ -188,7 +189,7 @@ def job_detail(request: Request, job_id: str, _: str = Depends(current_user)) ->
     if not job:
         raise HTTPException(404, "no such job")
     return _TEMPLATES.TemplateResponse(
-        "job.html", {"request": request, "base": BASE, "job": job}
+        request, "job.html", {"base": BASE, "job": job}
     )
 
 
