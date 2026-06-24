@@ -69,6 +69,32 @@
     </form>
   </section>
 
+  <!-- UPLOAD CONNECTIONS (OAuth) -->
+  <section class="card">
+    <h2>Upload connections</h2>
+    {% if not public_url %}
+      <p class="muted">Set <strong>Public base URL</strong> above (e.g. <code>{{ "https://suite.raumdock.org" + base }}</code>) and each platform's client id/secret, then connect. Register that callback URL in each developer app.</p>
+    {% endif %}
+    {% for o in oauth %}
+    <div class="vod" style="align-items:center">
+      <span style="flex:1">
+        <strong>{{ o.label }}</strong>
+        {% if o.connected %}<span class="badge set">{{ o.account or "connected" }}</span>
+        {% elif o.configured %}<span class="badge unset">not connected</span>
+        {% else %}<span class="badge unset">needs client id/secret + PUBLIC_URL</span>{% endif %}
+        <br><small class="muted">redirect: {{ public_url or "(set PUBLIC_URL)" }}/oauth/{{ o.platform }}/callback</small>
+      </span>
+      {% if o.connected %}
+        <form method="post" action="{{ base }}/oauth/{{ o.platform }}/disconnect" style="margin:0">
+          <button type="submit" class="ghost">Disconnect</button>
+        </form>
+      {% elif o.configured %}
+        <a href="{{ base }}/oauth/{{ o.platform }}/start"><button type="button">Connect</button></a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+
   <!-- VOD SELECTION -->
   <section class="card">
     <h2>Select VODs</h2>

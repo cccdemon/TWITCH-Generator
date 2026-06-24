@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import secrets as _secrets
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -17,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import oauth
 from . import twitch as twitch_stage
 from .config import data_dir, root_path
 from .jobs import manager
@@ -119,13 +121,15 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "vods": vods,
             "message": message,
             "users_configured": bool(_load_users()),
+            "oauth": oauth.all_status(),
+            "public_url": oauth.public_url(),
         },
     )
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, _: str = Depends(current_user)) -> HTMLResponse:
-    return _render(request)
+def index(request: Request, msg: str | None = None, _: str = Depends(current_user)) -> HTMLResponse:
+    return _render(request, message=msg)
 
 
 @app.post("/settings", response_class=HTMLResponse)
@@ -199,6 +203,50 @@ def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
     if not job:
         raise HTTPException(404, "no such job")
     return JSONResponse({"status": job.status, "log": job.log, "error": job.error})
+
+
+# ------------------------------------------------------ OAuth connect ---
+@app.get("/oauth/{platform}/start")
+def oauth_start(platform: str, request: Request, _: str = Depends(current_user)) -> RedirectResponse:
+    if platform not in oauth.PLATFORMS:
+        raise HTTPException(404, "unknown platform")
+    if not oauth.configured(platform):
+        return RedirectResponse(
+            f"{BASE}/?msg=" + quote(f"{platform}: set PUBLIC_URL + client id/secret in Settings first"),
+            status_code=303,
+        )
+    state = _secrets.token_urlsafe(24)
+    request.session[f"oauth_state_{platform}"] = state
+    return RedirectResponse(oauth.build_auth_url(platform, state), status_code=303)
+
+
+@app.get("/oauth/{platform}/callback")
+def oauth_callback(
+    request: Request,
+    platform: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    _: str = Depends(current_user),
+) -> RedirectResponse:
+    expected = request.session.pop(f"oauth_state_{platform}", None)
+    if error:
+        msg = f"{platform} connect denied: {error}"
+    elif not code or not state or state != expected:
+        msg = f"{platform} connect failed: state mismatch"
+    else:
+        try:
+            oauth.exchange_code(platform, code)
+            msg = f"{platform} connected"
+        except Exception as e:  # noqa: BLE001
+            msg = f"{platform} connect failed: {e}"
+    return RedirectResponse(f"{BASE}/?msg=" + quote(msg), status_code=303)
+
+
+@app.post("/oauth/{platform}/disconnect")
+def oauth_disconnect(platform: str, _: str = Depends(current_user)) -> RedirectResponse:
+    oauth.disconnect(platform)
+    return RedirectResponse(f"{BASE}/?msg=" + quote(f"{platform} disconnected"), status_code=303)
 
 
 # Middleware order matters: Starlette runs the LAST-added middleware first

@@ -1,11 +1,9 @@
 """Upload stage: push rendered clips to YouTube Shorts / TikTok / Instagram Reels.
 
-YouTube  : full implementation via Data API v3 (OAuth desktop flow).
-TikTok   : Content Posting API (direct post) — needs an approved app + user token.
-Instagram: Graph API Reels (Business/Creator account via a linked Facebook Page).
-
-TikTok and Instagram both require app review/approval before they post for real, so
-they are wired up but will no-op with a clear message if their tokens are absent.
+Tokens come from the in-app OAuth Connect flows (see src/oauth.py) — connect each
+platform once in the web UI. Each upload refreshes the token before use. Public
+publishing still depends on each platform's app review; uploads no-op with a clear
+message when a platform isn't connected.
 """
 from __future__ import annotations
 
@@ -14,37 +12,30 @@ from pathlib import Path
 
 import httpx
 
+from . import oauth
 from .config import env
 from .models import Clip, UploadResult
 
 
 # ---------------------------------------------------------------- YouTube ----
 def _youtube_upload(clip: Clip, privacy: str) -> UploadResult:
-    secrets = env("YOUTUBE_CLIENT_SECRETS")
-    token_file = env("YOUTUBE_TOKEN_FILE", default="/data/secrets/youtube_token.json")
-    if not secrets or not Path(secrets).exists():
-        return UploadResult("youtube", False, error="YOUTUBE_CLIENT_SECRETS not set/found")
+    token = oauth.token_for("youtube")
+    if not token:
+        return UploadResult("youtube", False, error="not connected (Settings → Connect YouTube)")
+    rec = oauth.record("youtube")
 
-    from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
 
-    scopes = ["https://www.googleapis.com/auth/youtube.upload"]
-    creds = None
-    tf = Path(token_file)
-    if tf.exists():
-        creds = Credentials.from_authorized_user_file(str(tf), scopes)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # Headless container: run console flow once to mint the token file.
-            flow = InstalledAppFlow.from_client_secrets_file(secrets, scopes)
-            creds = flow.run_console()
-        tf.parent.mkdir(parents=True, exist_ok=True)
-        tf.write_text(creds.to_json(), encoding="utf-8")
+    creds = Credentials(
+        token=token,
+        refresh_token=rec.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=env("YOUTUBE_CLIENT_ID"),
+        client_secret=env("YOUTUBE_CLIENT_SECRET"),
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+    )
 
     yt = build("youtube", "v3", credentials=creds)
     body = {
@@ -67,9 +58,9 @@ def _youtube_upload(clip: Clip, privacy: str) -> UploadResult:
 
 # ----------------------------------------------------------------- TikTok ----
 def _tiktok_upload(clip: Clip) -> UploadResult:
-    token = env("TIKTOK_ACCESS_TOKEN")
+    token = oauth.token_for("tiktok")
     if not token:
-        return UploadResult("tiktok", False, error="TIKTOK_ACCESS_TOKEN not set")
+        return UploadResult("tiktok", False, error="not connected (Settings → Connect TikTok)")
     try:
         size = Path(clip.path).stat().st_size
         init = httpx.post(
@@ -116,10 +107,10 @@ def _instagram_upload(clip: Clip, public_clip_url: str | None) -> UploadResult:
 
     Host the clip somewhere public and pass its URL via clip metadata / a CDN.
     """
-    token = env("INSTAGRAM_ACCESS_TOKEN")
-    ig_user = env("INSTAGRAM_USER_ID")
+    token = oauth.token_for("instagram")
+    ig_user = oauth.record("instagram").get("ig_user_id")
     if not (token and ig_user):
-        return UploadResult("instagram", False, error="INSTAGRAM_ACCESS_TOKEN/USER_ID not set")
+        return UploadResult("instagram", False, error="not connected (Settings → Connect Instagram)")
     if not public_clip_url:
         return UploadResult("instagram", False,
                             error="instagram needs a public video URL (host the clip first)")
