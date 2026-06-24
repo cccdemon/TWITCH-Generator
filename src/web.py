@@ -8,12 +8,13 @@ root and only outward links/redirects carry it via `base`.
 from __future__ import annotations
 
 import os
+import re
 import secrets as _secrets
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -32,6 +33,26 @@ from .settings_store import (
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 BASE = root_path()  # external prefix, e.g. "/vod"
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _list_clips() -> list[dict]:
+    """Rendered clips grouped by VOD, newest VOD first."""
+    base = data_dir()
+    out: list[dict] = []
+    for vod_dir in sorted(base.iterdir(), key=lambda p: p.name, reverse=True):
+        clips_dir = vod_dir / "clips"
+        if not clips_dir.is_dir():
+            continue
+        files = sorted(clips_dir.glob("*.mp4"))
+        if not files:
+            continue
+        out.append({
+            "vod": vod_dir.name,
+            "clips": [{"name": f.name, "size_mb": round(f.stat().st_size / 1e6, 1)}
+                      for f in files],
+        })
+    return out
 
 
 def _load_users() -> dict[str, str]:
@@ -123,6 +144,7 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "users_configured": bool(_load_users()),
             "oauth": oauth.all_status(),
             "public_url": oauth.public_url(),
+            "clip_groups": _list_clips(),
         },
     )
 
@@ -203,6 +225,18 @@ def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
     if not job:
         raise HTTPException(404, "no such job")
     return JSONResponse({"status": job.status, "log": job.log, "error": job.error})
+
+
+# ---------------------------------------------------------- downloads ---
+@app.get("/clips/{vod_id}/{filename}")
+def download_clip(vod_id: str, filename: str, _: str = Depends(current_user)) -> FileResponse:
+    if not (_SAFE_NAME.match(vod_id) and _SAFE_NAME.match(filename) and filename.endswith(".mp4")):
+        raise HTTPException(400, "bad name")
+    clips_root = (data_dir() / vod_id / "clips").resolve()
+    path = (clips_root / filename).resolve()
+    if not str(path).startswith(str(clips_root) + os.sep) or not path.is_file():
+        raise HTTPException(404, "no such clip")
+    return FileResponse(path, media_type="video/mp4", filename=filename)
 
 
 # ------------------------------------------------------ OAuth connect ---

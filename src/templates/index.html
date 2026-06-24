@@ -45,6 +45,26 @@
   {% if message %}<div class="msg">{{ message }}</div>{% endif %}
   {% if not users_configured %}<div class="warn">No USERS configured — set USERS in .env (e.g. <code>admin:password</code>) and restart.</div>{% endif %}
 
+  <!-- CLIPS / DOWNLOADS -->
+  <section class="card">
+    <h2>Clips</h2>
+    {% if clip_groups %}
+      {% for g in clip_groups %}
+      <div style="margin-bottom:14px">
+        <div class="muted" style="margin-bottom:6px">VOD {{ g.vod }} · {{ g.clips|length }} clip(s)</div>
+        {% for c in g.clips %}
+        <div class="vod" style="align-items:center">
+          <span style="flex:1">{{ c.name }} <small class="muted">· {{ c.size_mb }} MB</small></span>
+          <a href="{{ base }}/clips/{{ g.vod }}/{{ c.name }}" download><button type="button" class="ghost">Download</button></a>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted">No clips yet — process a VOD below, they appear here when done.</p>
+    {% endif %}
+  </section>
+
   <!-- SETTINGS -->
   <section class="card">
     <h2>Settings (.env values)</h2>

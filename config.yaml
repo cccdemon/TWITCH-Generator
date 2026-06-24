@@ -63,9 +63,8 @@ clip:
   burn_subtitles: true
 
 upload:
-  # Platforms to attempt. Remove ones you don't use.
-  platforms:
-    - youtube
-    - tiktok
-    - instagram
+  # Download-first: clips are offered in the web UI; you upload them yourself.
+  # To auto-upload instead, connect a platform in Settings and list it here
+  # (youtube | tiktok | instagram).
+  platforms: []
   privacy: "public"   # youtube: private|unlisted|public
