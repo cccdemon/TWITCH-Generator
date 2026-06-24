@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 from faster_whisper import WhisperModel
 
@@ -43,13 +44,21 @@ def transcribe(
     language: str | None = None,
     cpu_threads: int = 2,
     chunk_seconds: int = 1800,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[TranscriptSegment]:
-    """Transcribe to segments, chunk by chunk. Caches JSON to allow re-runs."""
+    """Transcribe to segments, chunk by chunk. Caches JSON to allow re-runs.
+
+    on_progress(done, total) is called with done=0 once the chunks are known, then
+    after each chunk — used to surface per-chunk progress in the job log.
+    """
     if cache_path.exists():
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         return [TranscriptSegment(**s) for s in data]
 
     chunks = _split_audio_chunks(media_path, cache_path.parent, chunk_seconds)
+    total = len(chunks)
+    if on_progress:
+        on_progress(0, total)
 
     wm = WhisperModel(model, device=device, compute_type=compute_type,
                       cpu_threads=cpu_threads, num_workers=1)
@@ -67,6 +76,8 @@ def transcribe(
             out.append(TranscriptSegment(start=round(seg.start + offset, 2),
                                          end=round(seg.end + offset, 2),
                                          text=seg.text.strip()))
+        if on_progress:
+            on_progress(i + 1, total)
 
     cache_path.write_text(
         json.dumps([s.__dict__ for s in out], ensure_ascii=False),

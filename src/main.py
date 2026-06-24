@@ -41,6 +41,12 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     console.rule("[bold]2/8 Whisper — transcribe")
     w = cfg.get("whisper", {})
+    def _whisper_progress(done: int, total: int) -> None:
+        if done == 0:
+            console.print(f"  split into {total} chunk(s)")
+        else:
+            console.print(f"  chunk {done}/{total} transcribed")
+
     segments = transcribe_stage.transcribe(
         media, work / "transcript.json",
         model=w.get("model", "small"),
@@ -49,6 +55,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         language=w.get("language"),
         cpu_threads=w.get("cpu_threads", 2),
         chunk_seconds=w.get("chunk_seconds", 1800),
+        on_progress=_whisper_progress,
     )
     console.print(f"{len(segments)} segments")
 
