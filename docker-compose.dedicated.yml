@@ -1,0 +1,49 @@
+# Dedicated-LXC stack: the app + its own Caddy (TLS via Cloudflare DNS-01).
+# Runs on the standalone LXC 105 serving vod.raumdock.org at the root path.
+# LXC 101 nginx SNI-passthrough sends :443 here; Caddy terminates TLS and
+# proxies to the app over the compose network.
+#
+# .env must provide: USERS, SESSION_SECRET, ANTHROPIC_API_KEY, TWITCH_*,
+#   PUBLIC_URL=https://vod.raumdock.org, CF_API_TOKEN (Cloudflare DNS edit).
+#
+# Bring up:  docker compose -f docker-compose.dedicated.yml up -d --build
+services:
+  app:
+    build: .
+    image: twitch-generator:latest
+    container_name: twitch-generator
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROOT_PATH: ""          # served at the subdomain root, no path prefix
+      WEB_PORT: "9443"
+    expose:
+      - "9443"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+      - whisper-cache:/root/.cache/huggingface
+
+  caddy:
+    build:
+      context: .
+      dockerfile: deploy/caddy/Dockerfile
+    image: twitch-caddy:latest
+    container_name: twitch-caddy
+    restart: unless-stopped
+    env_file: .env            # CF_API_TOKEN for DNS-01
+    ports:
+      - "443:443"
+      - "443:443/udp"
+      - "80:80"
+    volumes:
+      - ./Caddyfile.dedicated:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  whisper-cache:
+  caddy-data:
+  caddy-config:

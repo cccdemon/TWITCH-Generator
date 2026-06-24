@@ -1,0 +1,10 @@
+# Dedicated host (LXC 105, vod.raumdock.org). Caddy terminates TLS via the
+# Cloudflare DNS-01 ACME challenge and reverse-proxies to the app container.
+# LXC 101 nginx SNI-passes :443 here; Caddy owns :443 inside this LXC.
+{
+	acme_dns cloudflare {env.CF_API_TOKEN}
+}
+
+vod.raumdock.org {
+	reverse_proxy app:9443
+}
