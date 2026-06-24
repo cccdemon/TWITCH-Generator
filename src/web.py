@@ -7,6 +7,7 @@ root and only outward links/redirects carry it via `base`.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets as _secrets
@@ -36,23 +37,54 @@ BASE = root_path()  # external prefix, e.g. "/vod"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _list_clips() -> list[dict]:
-    """Rendered clips grouped by VOD, newest VOD first."""
-    base = data_dir()
+def _vod_groups() -> list[dict]:
+    """VODs that have rendered clips: [{vod, count}], newest first."""
     out: list[dict] = []
-    for vod_dir in sorted(base.iterdir(), key=lambda p: p.name, reverse=True):
+    for vod_dir in sorted(data_dir().iterdir(), key=lambda p: p.name, reverse=True):
         clips_dir = vod_dir / "clips"
         if not clips_dir.is_dir():
             continue
-        files = sorted(clips_dir.glob("*.mp4"))
-        if not files:
-            continue
-        out.append({
-            "vod": vod_dir.name,
-            "clips": [{"name": f.name, "size_mb": round(f.stat().st_size / 1e6, 1)}
-                      for f in files],
-        })
+        n = sum(1 for _ in clips_dir.glob("*.mp4"))
+        if n:
+            out.append({"vod": vod_dir.name, "count": n})
     return out
+
+
+def _moments_map(vod_id: str) -> dict[int, dict]:
+    """Map clip-start-second -> moment record (title/score/components)."""
+    p = data_dir() / vod_id / "moments.json"
+    out: dict[int, dict] = {}
+    if p.exists():
+        try:
+            for m in json.loads(p.read_text(encoding="utf-8")):
+                out[int(m["start"])] = m
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
+def _clips_detail(vod_id: str) -> list[dict]:
+    """Clips of one VOD joined with their moment metadata."""
+    clips_dir = data_dir() / vod_id / "clips"
+    if not clips_dir.is_dir():
+        return []
+    mm = _moments_map(vod_id)
+    res: list[dict] = []
+    for f in sorted(clips_dir.glob("*.mp4")):
+        lead = f.name.split("_", 1)[0]
+        m = mm.get(int(lead)) if lead.isdigit() else None
+        m = m or {}
+        res.append({
+            "name": f.name,
+            "size_mb": round(f.stat().st_size / 1e6, 1),
+            "title": m.get("title") or f.name,
+            "category": m.get("category", ""),
+            "score": m.get("score"),
+            "audio": m.get("audio_score"),
+            "text": m.get("text_score"),
+            "video": m.get("video_score"),
+        })
+    return res
 
 
 def _load_users() -> dict[str, str]:
@@ -144,7 +176,7 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "users_configured": bool(_load_users()),
             "oauth": oauth.all_status(),
             "public_url": oauth.public_url(),
-            "clip_groups": _list_clips(),
+            "clip_groups": _vod_groups(),
         },
     )
 
@@ -227,16 +259,36 @@ def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
     return JSONResponse({"status": job.status, "log": job.log, "error": job.error})
 
 
-# ---------------------------------------------------------- downloads ---
+# --------------------------------------------------------------- clips ---
+@app.get("/clips", response_class=HTMLResponse)
+def clips_index(request: Request, _: str = Depends(current_user)) -> HTMLResponse:
+    return _TEMPLATES.TemplateResponse(
+        request, "clips_index.html", {"base": BASE, "groups": _vod_groups()}
+    )
+
+
+@app.get("/clips/{vod_id}", response_class=HTMLResponse)
+def clips_vod(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTMLResponse:
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    clips = _clips_detail(vod_id)
+    if not clips:
+        raise HTTPException(404, "no clips for this vod")
+    return _TEMPLATES.TemplateResponse(
+        request, "clips_vod.html", {"base": BASE, "vod": vod_id, "clips": clips}
+    )
+
+
 @app.get("/clips/{vod_id}/{filename}")
-def download_clip(vod_id: str, filename: str, _: str = Depends(current_user)) -> FileResponse:
+def clip_file(vod_id: str, filename: str, _: str = Depends(current_user)) -> FileResponse:
+    """Serve a clip inline (Range-capable) so it previews and downloads."""
     if not (_SAFE_NAME.match(vod_id) and _SAFE_NAME.match(filename) and filename.endswith(".mp4")):
         raise HTTPException(400, "bad name")
     clips_root = (data_dir() / vod_id / "clips").resolve()
     path = (clips_root / filename).resolve()
     if not str(path).startswith(str(clips_root) + os.sep) or not path.is_file():
         raise HTTPException(404, "no such clip")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    return FileResponse(path, media_type="video/mp4")
 
 
 # ------------------------------------------------------ OAuth connect ---

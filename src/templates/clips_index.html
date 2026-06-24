@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clips — TWITCH-Generator</title>
+<style>
+  :root { --bg:#0e0e12; --card:#1a1a22; --line:#2a2a35; --fg:#e6e6ea; --mut:#9a9aa8; --acc:#9146ff; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+  header h1 { font-size:18px; margin:0; } a { color:var(--acc); }
+  main { max-width:980px; margin:0 auto; padding:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+  .row { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .muted { color:var(--mut); } button { background:transparent; border:1px solid var(--line); color:var(--fg); padding:8px 14px; border-radius:8px; cursor:pointer; }
+</style>
+</head>
+<body>
+<header><a href="{{ base }}/">← dashboard</a><h1>Clips by video</h1></header>
+<main>
+  <section class="card">
+    {% if groups %}
+      {% for g in groups %}
+      <div class="row">
+        <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">VOD {{ g.vod }}</a> <small class="muted">· {{ g.count }} clip(s)</small></span>
+        <a href="{{ base }}/clips/{{ g.vod }}"><button type="button">View</button></a>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted">No clips yet. Process a VOD on the dashboard.</p>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>
