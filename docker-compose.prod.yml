@@ -16,6 +16,9 @@ services:
     image: twitch-generator:latest
     container_name: twitch-generator
     restart: unless-stopped
+    # Hard CPU + memory cap so Whisper/ffmpeg can't hog the shared LXC.
+    cpus: 2.0
+    mem_limit: 4g
     env_file: .env
     environment:
       ROOT_PATH: "/vod"

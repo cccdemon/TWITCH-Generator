@@ -7,10 +7,13 @@ download:
   reuse_existing: true
 
 whisper:
-  model: "large-v3"      # tiny|base|small|medium|large-v3 (smaller = faster, less accurate)
+  # tiny|base|small|medium|large-v3 — smaller = much faster on CPU.
+  # large-v3 on CPU takes hours; "small" is the sweet spot for highlight detection.
+  model: "small"
   device: "cpu"          # "cuda" with a GPU image
   compute_type: "int8"   # cpu: int8 ; gpu: float16
-  language: de         # null = autodetect, or "en"/"de"
+  language: de           # null = autodetect, or "en"/"de"
+  cpu_threads: 2         # cap CPU threads (matches the 2-CPU container limit)
 
 analyze:
   model: "claude-sonnet-4-6"

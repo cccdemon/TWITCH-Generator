@@ -12,17 +12,19 @@ from .models import TranscriptSegment
 def transcribe(
     media_path: Path,
     cache_path: Path,
-    model: str = "large-v3",
+    model: str = "small",
     device: str = "cpu",
     compute_type: str = "int8",
     language: str | None = None,
+    cpu_threads: int = 2,
 ) -> list[TranscriptSegment]:
     """Transcribe to segments. Caches JSON next to the VOD to allow re-runs."""
     if cache_path.exists():
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         return [TranscriptSegment(**s) for s in data]
 
-    wm = WhisperModel(model, device=device, compute_type=compute_type)
+    wm = WhisperModel(model, device=device, compute_type=compute_type,
+                      cpu_threads=cpu_threads, num_workers=1)
     segments, _info = wm.transcribe(
         str(media_path),
         language=language,
