@@ -143,6 +143,33 @@ class JobManager:
             return True
         return False
 
+    def delete(self, job_id: str) -> bool:
+        """Remove a finished job record. Running/queued jobs must be cancelled first."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return False
+        if job.status in ("running", "queued"):
+            return False
+        with self._lock:
+            self._jobs.pop(job_id, None)
+            if job_id in self._order:
+                self._order.remove(job_id)
+        self._persist()
+        return True
+
+    def clear_finished(self) -> int:
+        """Drop all non-active job records at once. Returns how many were removed."""
+        removed = 0
+        with self._lock:
+            keep = [i for i in self._order
+                    if self._jobs[i].status in ("running", "queued")]
+            removed = len(self._order) - len(keep)
+            self._jobs = {i: self._jobs[i] for i in keep}
+            self._order = keep
+        if removed:
+            self._persist()
+        return removed
+
     def retry(self, job_id: str) -> Job | None:
         """Resubmit a finished job's VOD as a new job. Reuses cached download +
         transcript on disk, so it effectively resumes from the LLM stage."""

@@ -370,6 +370,18 @@ def retry_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
     return RedirectResponse(f"{BASE}/", status_code=303)
 
 
+@app.post("/jobs/{job_id}/delete")
+def delete_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
+    manager.delete(job_id)
+    return RedirectResponse(f"{BASE}/", status_code=303)
+
+
+@app.post("/jobs/clear")
+def clear_jobs(_: str = Depends(current_user)) -> RedirectResponse:
+    n = manager.clear_finished()
+    return RedirectResponse(f"{BASE}/?msg=" + quote(f"cleared {n} finished job(s)"), status_code=303)
+
+
 @app.get("/api/jobs")
 def api_jobs(_: str = Depends(current_user)) -> JSONResponse:
     etas = _job_etas()

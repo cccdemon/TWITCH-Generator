@@ -151,7 +151,10 @@
 
   <!-- JOBS -->
   <section class="card">
-    <h2>Jobs</h2>
+    <h2>Jobs
+      <form method="post" action="{{ base }}/jobs/clear" style="display:inline;float:right;margin-top:-4px" onsubmit="return confirm('Remove all finished job records (done/error/interrupted/cancelled)?')">
+        <button type="submit" class="ghost" style="font-size:12px;padding:6px 10px">Clear finished</button></form>
+    </h2>
     <table id="jobs">
       <thead><tr><th>ID</th><th>VOD</th><th>Status</th><th>Created</th><th></th></tr></thead>
       <tbody>
@@ -166,9 +169,13 @@
             {% if j.status in ('queued', 'running') %}
             <form method="post" action="{{ base }}/jobs/{{ j.id }}/cancel" style="display:inline">
               <button type="submit" class="ghost">cancel</button></form>
-            {% elif j.status in ('error', 'cancelled', 'interrupted') %}
+            {% else %}
+            {% if j.status in ('error', 'cancelled', 'interrupted') %}
             <form method="post" action="{{ base }}/jobs/{{ j.id }}/retry" style="display:inline">
               <button type="submit" class="ghost">retry</button></form>
+            {% endif %}
+            <form method="post" action="{{ base }}/jobs/{{ j.id }}/delete" style="display:inline" onsubmit="return confirm('Delete job record {{ j.id }}?')">
+              <button type="submit" class="ghost" style="border-color:#633;color:#fbc">delete</button></form>
             {% endif %}
           </td>
         </tr>
@@ -190,11 +197,15 @@ async function refresh() {
     const busy = jobs.some(j => j.status === 'running' || j.status === 'queued');
     const tb = document.querySelector('#jobs tbody');
     tb.innerHTML = jobs.length ? jobs.map(j => {
-      const action = (j.status === 'queued' || j.status === 'running')
-        ? `<form method="post" action="${BASE}/jobs/${j.id}/cancel" style="display:inline"><button type="submit" class="ghost">cancel</button></form>`
-        : (['error', 'cancelled', 'interrupted'].includes(j.status))
-        ? `<form method="post" action="${BASE}/jobs/${j.id}/retry" style="display:inline"><button type="submit" class="ghost">retry</button></form>`
-        : '';
+      let action;
+      if (j.status === 'queued' || j.status === 'running') {
+        action = `<form method="post" action="${BASE}/jobs/${j.id}/cancel" style="display:inline"><button type="submit" class="ghost">cancel</button></form>`;
+      } else {
+        const retry = ['error', 'cancelled', 'interrupted'].includes(j.status)
+          ? `<form method="post" action="${BASE}/jobs/${j.id}/retry" style="display:inline"><button type="submit" class="ghost">retry</button></form>`
+          : '';
+        action = retry + `<form method="post" action="${BASE}/jobs/${j.id}/delete" style="display:inline" onsubmit="return confirm('Delete job record ${j.id}?')"><button type="submit" class="ghost" style="border-color:#633;color:#fbc">delete</button></form>`;
+      }
       const eta = (j.eta != null) ? ` <small class="muted">~${Math.ceil(j.eta/60)}m left</small>` : '';
       const cost = (j.est_cost != null) ? ` <small class="muted">~$${j.est_cost.toFixed(2)}</small>` : '';
       const name = j.label
