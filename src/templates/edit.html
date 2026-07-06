@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor — VOD {{ vod }}</title>
+<style>
+  :root { --bg:#0e0e12; --card:#1a1a22; --line:#2a2a35; --fg:#e6e6ea; --mut:#9a9aa8; --acc:#9146ff; --ok:#3ecf8e; --cam:#3ecf8e; --game:#4aa3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+  header h1 { font-size:17px; margin:0; } a { color:var(--acc); }
+  main { max-width:1200px; margin:0 auto; padding:20px; display:grid; grid-template-columns:1fr 320px; gap:20px; }
+  @media (max-width:900px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h2 { font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--mut); margin:0 0 10px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:8px 0 3px; }
+  input[type=number]{ width:100%; padding:7px 9px; background:#11111a; border:1px solid var(--line); border-radius:7px; color:var(--fg); }
+  button { background:var(--acc); color:#fff; border:0; padding:9px 13px; border-radius:8px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:500; }
+  button.sm { padding:6px 10px; font-size:13px; }
+  .stagewrap { position:relative; display:inline-block; max-width:100%; line-height:0; }
+  video { width:100%; max-height:70vh; background:#000; display:block; }
+  #overlay { position:absolute; inset:0; pointer-events:none; }
+  .box { position:absolute; box-sizing:border-box; cursor:move; pointer-events:auto; }
+  .box.cam { border:2px solid var(--cam); background:rgba(62,207,142,.14); }
+  .box.game { border:2px solid var(--game); background:rgba(74,163,255,.10); }
+  .box .h { position:absolute; width:14px; height:14px; right:-7px; bottom:-7px; border-radius:3px; cursor:nwse-resize; }
+  .box.cam .h { background:var(--cam); } .box.game .h { background:var(--game); }
+  .box .tag { position:absolute; top:0; left:0; font:11px/1.4 system-ui; padding:1px 5px; color:#000; }
+  .box.cam .tag { background:var(--cam); } .box.game .tag { background:var(--game); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .moments { max-height:180px; overflow:auto; display:flex; flex-direction:column; gap:5px; }
+  .m { text-align:left; width:100%; }
+  .muted { color:var(--mut); } code { background:#11111a; padding:1px 5px; border-radius:5px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { background:transparent; border:0; border-radius:0; color:var(--fg); font-weight:500; }
+  .seg button.on { background:var(--acc); color:#fff; }
+  #result { margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <a href="{{ base }}/clips/{{ vod }}">← clips</a>
+  <h1>Editor — {{ label or ("VOD " ~ vod) }}</h1>
+</header>
+<main>
+  <!-- LEFT: video + overlay -->
+  <section class="card">
+    {% if has_source %}
+    <div class="stagewrap" id="stage">
+      <video id="vid" src="{{ base }}/source/{{ vod }}" preload="metadata"></video>
+      <div id="overlay">
+        <div class="box game" id="boxGame"><span class="tag">game</span><div class="h"></div></div>
+        <div class="box cam" id="boxCam"><span class="tag">cam</span><div class="h"></div></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button type="button" class="ghost sm" id="play">▶</button>
+      <input type="range" id="seek" min="0" max="100" step="0.1" value="0" style="flex:1">
+      <span class="muted" id="tcur" style="font-variant-numeric:tabular-nums">0:00</span>
+    </div>
+    <p class="muted" style="font-size:13px;margin:10px 0 0">
+      Scrub the video. Draw/drag the <b style="color:var(--cam)">cam</b> and <b style="color:var(--game)">game</b> boxes over the regions you want.
+      Pick which box you're editing on the right. Set In/Out to trim, then Render.
+    </p>
+    {% else %}
+    <p class="muted">Source video not available (deleted via “Free”). Re-process the VOD to edit clips.</p>
+    {% endif %}
+  </section>
+
+  <!-- RIGHT: controls -->
+  <section class="card" {% if not has_source %}style="opacity:.5;pointer-events:none"{% endif %}>
+    <h2>Trim</h2>
+    <div class="row">
+      <button type="button" class="ghost sm" id="setIn">Set In ⟼</button>
+      <button type="button" class="ghost sm" id="setOut">⟻ Set Out</button>
+      <button type="button" class="ghost sm" id="preview">▶ In→Out</button>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <div><label>In (s)</label><input type="number" id="inS" step="0.1" min="0" value="0"></div>
+      <div><label>Out (s)</label><input type="number" id="outS" step="0.1" min="0" value="30"></div>
+    </div>
+    <p class="muted" style="font-size:12px;margin:6px 0 0">length <span id="len">30.0</span>s</p>
+
+    <h2 style="margin-top:18px">Layout</h2>
+    <div class="seg" id="layout">
+      <button type="button" data-v="split" class="on">Split (cam+game)</button>
+      <button type="button" data-v="crop">Crop (game only)</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:10px">Drag either box on the video (corner handle resizes).<br>cam <code id="roCam">—</code><br>game <code id="roGame">—</code></p>
+
+    <h2 style="margin-top:18px">Options</h2>
+    <label class="row" style="color:var(--fg);font-size:14px"><input type="checkbox" id="subs"> burn subtitles</label>
+    <label>Title</label>
+    <input type="text" id="title" placeholder="clip title" style="width:100%;padding:7px 9px;background:#11111a;border:1px solid var(--line);border-radius:7px;color:var(--fg)">
+
+    <div style="margin-top:16px" class="row">
+      <button type="button" id="render">Render clip</button>
+      <span id="status" class="muted" style="font-size:13px"></span>
+    </div>
+    <div id="result"></div>
+
+    {% if moments %}
+    <h2 style="margin-top:18px">Highlights ({{ moments|length }})</h2>
+    <div class="moments" id="moments">
+      {% for m in moments %}
+      <button type="button" class="ghost sm m" data-s="{{ m.start }}" data-e="{{ m.end }}" data-t="{{ m.title }}">
+        {{ "%.0f"|format(m.start) }}s · {{ m.category }} · {{ m.title }}
+      </button>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+</main>
+{% if has_source %}
+<script>
+const BASE = "{{ base }}", VOD = "{{ vod }}";
+const vid = document.getElementById('vid');
+const overlay = document.getElementById('overlay');
+const boxes = { cam: document.getElementById('boxCam'), game: document.getElementById('boxGame') };
+const inS = document.getElementById('inS'), outS = document.getElementById('outS');
+const initCam = {{ facecam|tojson if facecam else 'null' }};
+
+// fractional state per box
+const frac = { cam: initCam || {x:0,y:0,w:0.22,h:0.22}, game: {x:0,y:0,w:1,h:1} };
+let layout = 'split';
+
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function stageRect(){ return vid.getBoundingClientRect(); }
+
+function drawBox(which){
+  const r = stageRect(), f = frac[which], el = boxes[which];
+  el.style.left = (f.x*r.width)+'px'; el.style.top = (f.y*r.height)+'px';
+  el.style.width = (f.w*r.width)+'px'; el.style.height = (f.h*r.height)+'px';
+  document.getElementById(which==='cam'?'roCam':'roGame').textContent =
+    `x=${f.x.toFixed(2)} y=${f.y.toFixed(2)} w=${f.w.toFixed(2)} h=${f.h.toFixed(2)}`;
+}
+function drawAll(){ drawBox('cam'); drawBox('game'); }
+
+// set fractions from a pixel rect
+function setPx(which, px){
+  const r = stageRect();
+  let x = clamp(px.x,0,r.width), y = clamp(px.y,0,r.height);
+  let w = clamp(px.w,8,r.width-x), h = clamp(px.h,8,r.height-y);
+  frac[which] = { x:x/r.width, y:y/r.height, w:w/r.width, h:h/r.height };
+  drawBox(which);
+}
+
+// --- pointer interaction: drag/resize each box directly ---
+let mode=null, target=null, sx=0, sy=0, startFrac=null;
+function pos(e){ const r=stageRect(); const p=(e.touches&&e.touches[0])||e; return {x:p.clientX-r.left, y:p.clientY-r.top}; }
+function boxPx(which){ const r=stageRect(), f=frac[which]; return {x:f.x*r.width,y:f.y*r.height,w:f.w*r.width,h:f.h*r.height}; }
+
+function attach(which){
+  const el = boxes[which], h = el.querySelector('.h');
+  const start = (e, m)=>{ mode=m; target=which; const p=pos(e); sx=p.x; sy=p.y; startFrac={...frac[which]}; e.preventDefault(); e.stopPropagation(); };
+  el.addEventListener('mousedown', e=> start(e, e.target===h?'resize':'move'));
+  el.addEventListener('touchstart', e=> start(e, e.target===h?'resize':'move'), {passive:false});
+}
+attach('cam'); attach('game');
+window.addEventListener('mousemove', mv);
+window.addEventListener('touchmove', mv, {passive:false});
+window.addEventListener('mouseup', ()=>{mode=null;}); window.addEventListener('touchend', ()=>{mode=null;});
+
+function mv(e){
+  if(!mode) return;
+  const p = pos(e), r = stageRect();
+  if(mode==='resize'){
+    const o = {x:startFrac.x*r.width, y:startFrac.y*r.height};
+    setPx(target,{x:o.x,y:o.y,w:p.x-o.x,h:p.y-o.y});
+  } else {
+    setPx(target,{x:startFrac.x*r.width+(p.x-sx),y:startFrac.y*r.height+(p.y-sy),w:startFrac.w*r.width,h:startFrac.h*r.height});
+  }
+  e.preventDefault();
+}
+
+// --- trim ---
+function updateLen(){ document.getElementById('len').textContent = Math.max(0,(+outS.value - +inS.value)).toFixed(1); }
+document.getElementById('setIn').onclick = ()=>{ inS.value = vid.currentTime.toFixed(1); updateLen(); };
+document.getElementById('setOut').onclick = ()=>{ outS.value = vid.currentTime.toFixed(1); updateLen(); };
+inS.oninput = outS.oninput = updateLen;
+let stopAt = null;
+document.getElementById('preview').onclick = ()=>{ vid.currentTime = +inS.value; stopAt = +outS.value; vid.play(); };
+vid.addEventListener('timeupdate', ()=>{ if(stopAt!=null && vid.currentTime>=stopAt){ vid.pause(); stopAt=null; } });
+
+// --- layout / which toggles ---
+document.querySelectorAll('#layout button').forEach(b=> b.onclick = ()=>{
+  layout = b.dataset.v;
+  document.querySelectorAll('#layout button').forEach(x=>x.classList.toggle('on', x===b));
+  boxes.cam.style.display = layout==='split' ? '' : 'none';
+});
+
+// --- moments quick jump ---
+document.querySelectorAll('.m').forEach(b=> b.onclick = ()=>{
+  inS.value = (+b.dataset.s).toFixed(1); outS.value = (+b.dataset.e).toFixed(1); updateLen();
+  if(!document.getElementById('title').value) document.getElementById('title').value = b.dataset.t || '';
+  vid.currentTime = +b.dataset.s;
+});
+
+// --- render ---
+document.getElementById('render').onclick = async ()=>{
+  const st = document.getElementById('status'), res = document.getElementById('result');
+  if(+outS.value - +inS.value < 0.5){ st.textContent='clip too short'; return; }
+  st.textContent = 'rendering… (this can take a bit)'; res.innerHTML='';
+  const fd = new FormData();
+  fd.set('start', inS.value); fd.set('end', outS.value);
+  fd.set('layout', layout); fd.set('title', document.getElementById('title').value);
+  if(document.getElementById('subs').checked) fd.set('subtitles','on');
+  fd.set('cam_x',frac.cam.x); fd.set('cam_y',frac.cam.y); fd.set('cam_w',frac.cam.w); fd.set('cam_h',frac.cam.h);
+  fd.set('game_x',frac.game.x); fd.set('game_y',frac.game.y); fd.set('game_w',frac.game.w); fd.set('game_h',frac.game.h);
+  try {
+    const r = await fetch(`${BASE}/render/${VOD}`, {method:'POST', body:fd});
+    if(!r.ok){ st.textContent = 'render failed: '+(await r.text()); return; }
+    const d = await r.json();
+    st.textContent = 'done ✓';
+    res.innerHTML = `<video controls src="${BASE}/clips/${VOD}/${encodeURIComponent(d.name)}?t=${Date.now()}" style="width:100%;border-radius:8px;margin-top:6px"></video>`+
+      `<div class="muted" style="font-size:12px;margin-top:4px">saved as ${d.name} — also in the <a href="${BASE}/clips/${VOD}">clips list</a></div>`;
+  } catch(e){ st.textContent = 'error: '+e; }
+};
+
+// --- custom transport (native controls removed so the overlay is free) ---
+const seek = document.getElementById('seek'), tcur = document.getElementById('tcur'), playBtn = document.getElementById('play');
+function fmtT(s){ s=Math.max(0,s|0); const m=(s/60)|0; return m+':'+String(s%60).padStart(2,'0'); }
+playBtn.onclick = ()=>{ vid.paused ? vid.play() : vid.pause(); };
+vid.addEventListener('play', ()=> playBtn.textContent='⏸');
+vid.addEventListener('pause', ()=> playBtn.textContent='▶');
+seek.addEventListener('input', ()=>{ vid.currentTime = +seek.value; });
+vid.addEventListener('timeupdate', ()=>{
+  if(!seek.matches(':active')) seek.value = vid.currentTime;
+  tcur.textContent = fmtT(vid.currentTime) + ' / ' + fmtT(vid.duration || 0);
+});
+
+// init
+function boot(){ seek.max = vid.duration || 100; drawAll(); updateLen(); tcur.textContent = '0:00 / ' + fmtT(vid.duration||0); }
+if (vid.readyState >= 1) boot(); else vid.addEventListener('loadedmetadata', boot);
+window.addEventListener('resize', drawAll);
+</script>
+{% endif %}
+</body>
+</html>

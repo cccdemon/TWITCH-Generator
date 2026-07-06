@@ -12,6 +12,7 @@ import os
 import re
 import secrets as _secrets
 import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,12 +22,14 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import clip as clip_stage
 from . import oauth
 from . import pricing
 from . import timing
 from . import twitch as twitch_stage
-from .config import data_dir, root_path
+from .config import data_dir, load_config, root_path
 from .jobs import manager
+from .models import TranscriptSegment
 
 # What to keep when "freeing" a VOD (delete the heavy source, keep the output).
 _FREE_KEEP = {"clips", "moments.json", "cost.json", "info.json"}
@@ -436,7 +439,7 @@ def clips_index(request: Request, msg: str | None = None, _: str = Depends(curre
 
 
 @app.get("/clips/{vod_id}", response_class=HTMLResponse)
-def clips_vod(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTMLResponse:
+def clips_vod(request: Request, vod_id: str, msg: str | None = None, _: str = Depends(current_user)) -> HTMLResponse:
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
     clips = _clips_detail(vod_id)
@@ -446,11 +449,200 @@ def clips_vod(request: Request, vod_id: str, _: str = Depends(current_user)) -> 
     return _TEMPLATES.TemplateResponse(
         request, "clips_vod.html",
         {
-            "base": BASE, "vod": vod_id, "clips": clips,
+            "base": BASE, "vod": vod_id, "clips": clips, "message": msg,
             "label": _vod_label(vod_id),
             "usd": cost["usd"] if cost else None,
             "src_mb": _source_mb(data_dir() / vod_id),
         },
+    )
+
+
+def _moments_list(vod_id: str) -> list[dict]:
+    """Highlight windows [{start,end,title,category}] for the editor's quick-jump."""
+    p = data_dir() / vod_id / "moments.json"
+    out: list[dict] = []
+    if p.exists():
+        try:
+            for m in json.loads(p.read_text(encoding="utf-8")):
+                out.append({
+                    "start": round(float(m["start"]), 2),
+                    "end": round(float(m["end"]), 2),
+                    "title": m.get("title", ""),
+                    "category": m.get("category", ""),
+                })
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
+            pass
+    return sorted(out, key=lambda x: x["start"])
+
+
+def _load_facecam(vod_id: str) -> dict | None:
+    p = data_dir() / vod_id / "facecam.json"
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return d or None
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+@app.get("/source/{vod_id}")
+def source_video(vod_id: str, _: str = Depends(current_user)) -> FileResponse:
+    """Serve the raw VOD (Range-capable) so the editor can scrub/seek it."""
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    src = (data_dir() / vod_id / f"{vod_id}.mp4").resolve()
+    root = (data_dir() / vod_id).resolve()
+    if not str(src).startswith(str(root) + os.sep) or not src.is_file():
+        raise HTTPException(404, "source video not available (deleted?)")
+    return FileResponse(src, media_type="video/mp4")
+
+
+@app.get("/edit/{vod_id}", response_class=HTMLResponse)
+def editor(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTMLResponse:
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    src = data_dir() / vod_id / f"{vod_id}.mp4"
+    c = (load_config().get("clip") or {})
+    return _TEMPLATES.TemplateResponse(
+        request, "edit.html",
+        {
+            "base": BASE, "vod": vod_id, "label": _vod_label(vod_id),
+            "moments": _moments_list(vod_id),
+            "facecam": _load_facecam(vod_id),
+            "has_source": src.exists(),
+            "width": c.get("width", 1080), "height": c.get("height", 1920),
+        },
+    )
+
+
+@app.post("/render/{vod_id}")
+def render_clip_custom(
+    vod_id: str,
+    start: float = Form(...), end: float = Form(...),
+    layout: str = Form("split"), subtitles: str | None = Form(None),
+    title: str = Form(""),
+    cam_x: float = Form(0.0), cam_y: float = Form(0.0),
+    cam_w: float = Form(0.22), cam_h: float = Form(0.22),
+    game_x: float = Form(0.0), game_y: float = Form(0.0),
+    game_w: float = Form(1.0), game_h: float = Form(1.0),
+    _: str = Depends(current_user),
+) -> JSONResponse:
+    """Render one clip on demand from the editor's trim + crop selection."""
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    src = data_dir() / vod_id / f"{vod_id}.mp4"
+    if not src.exists():
+        raise HTTPException(404, "source video not available")
+    duration = end - start
+    if duration < 0.5:
+        raise HTTPException(400, "clip too short")
+
+    cfg = load_config().get("clip") or {}
+    segments = None
+    if subtitles == "on":
+        tp = data_dir() / vod_id / "transcript.json"
+        if tp.exists():
+            try:
+                segments = [TranscriptSegment(**s)
+                            for s in json.loads(tp.read_text(encoding="utf-8"))]
+            except (json.JSONDecodeError, OSError, TypeError):
+                segments = None
+
+    safe = "".join(ch if ch.isalnum() else "_" for ch in (title or "clip"))[:40] or "clip"
+    name = f"{int(start)}_edit_{safe}.mp4"
+    out_path = data_dir() / vod_id / "clips" / name
+    try:
+        clip_stage.render_custom(
+            src, out_path,
+            start=start, duration=duration,
+            width=cfg.get("width", 1080), height=cfg.get("height", 1920),
+            layout="split" if layout == "split" else "crop",
+            facecam={"x": cam_x, "y": cam_y, "w": cam_w, "h": cam_h},
+            game={"x": game_x, "y": game_y, "w": game_w, "h": game_h},
+            segments=segments, burn_subtitles=(subtitles == "on"), title=title,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"render failed: {e}")
+    return JSONResponse({"ok": True, "name": name})
+
+
+@app.get("/frame/{vod_id}")
+def frame_image(vod_id: str, _: str = Depends(current_user)) -> FileResponse:
+    """A representative source frame for the facecam picker."""
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    vdir = data_dir() / vod_id
+    frames = sorted((vdir / "frames").glob("f_*.jpg"))
+    if frames:
+        return FileResponse(frames[len(frames) // 2], media_type="image/jpeg")
+    preview = vdir / "facecam_preview.jpg"
+    if preview.exists():
+        return FileResponse(preview, media_type="image/jpeg")
+    src = vdir / f"{vod_id}.mp4"
+    if src.exists():
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", "60", "-i", str(src),
+                 "-frames:v", "1", "-q:v", "3", str(preview)],
+                check=True, capture_output=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            pass
+        if preview.exists():
+            return FileResponse(preview, media_type="image/jpeg")
+    raise HTTPException(404, "no frame available — process this VOD first")
+
+
+@app.get("/facecam/{vod_id}", response_class=HTMLResponse)
+def facecam_picker(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTMLResponse:
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    box = None
+    p = data_dir() / vod_id / "facecam.json"
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if data:
+                box = data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return _TEMPLATES.TemplateResponse(
+        request, "facecam.html",
+        {"base": BASE, "vod": vod_id, "label": _vod_label(vod_id), "box": box},
+    )
+
+
+@app.post("/facecam/{vod_id}")
+def facecam_save(
+    vod_id: str,
+    x: float = Form(...), y: float = Form(...),
+    w: float = Form(...), h: float = Form(...),
+    _: str = Depends(current_user),
+) -> RedirectResponse:
+    """Save a manually-picked facecam box (overrides auto-detect on next render)."""
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+
+    def _clamp01(v: float, lo: float = 0.0) -> float:
+        return max(lo, min(1.0, v))
+
+    bx, by = _clamp01(x), _clamp01(y)
+    bw, bh = _clamp01(w, 0.02), _clamp01(h, 0.02)
+    bw = min(bw, 1.0 - bx)
+    bh = min(bh, 1.0 - by)
+    box = {"x": round(bx, 4), "y": round(by, 4),
+           "w": round(bw, 4), "h": round(bh, 4), "manual": True}
+    vdir = data_dir() / vod_id
+    if not vdir.is_dir():
+        raise HTTPException(404, "no such vod")
+    try:
+        (vdir / "facecam.json").write_text(json.dumps(box), encoding="utf-8")
+    except OSError:
+        raise HTTPException(500, "could not save")
+    return RedirectResponse(
+        f"{BASE}/clips/{vod_id}?msg=" + quote("Facecam box saved — retry the job to re-render"),
+        status_code=303,
     )
 
 

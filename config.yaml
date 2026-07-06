@@ -66,10 +66,14 @@ clip:
   #   "crop"   — plain center-crop of the source into 9:16 (old behaviour).
   # Only used when vertical: true.
   layout: split
+  # Auto-detect the facecam box with Claude Vision (one cheap call per VOD,
+  # cached to data/<vod>/facecam.json). Manual picks in the web UI override it.
+  # Falls back to the facecam box below when detection finds nothing.
+  facecam_auto: true
   # Facecam region in the SOURCE frame, as fractions (0..1) of width/height.
-  # Defaults assume a webcam box in the TOP-RIGHT corner — tune per streamer.
+  # Used as fallback when auto-detect is off or finds no cam. Tune per streamer.
   facecam:
-    x: 0.78   # left edge of the cam box (fraction of source width)
+    x: 0.0    # left edge of the cam box (fraction of source width) — TOP-LEFT corner
     y: 0.0    # top edge  (fraction of source height)
     w: 0.22   # box width  (fraction of source width)
     h: 0.22   # box height (fraction of source height)

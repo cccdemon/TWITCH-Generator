@@ -149,3 +149,80 @@ def render_clip(
 
     return Clip(moment=moment, path=str(out_path),
                 srt_path=str(srt_path) if has_subs else None)
+
+
+def _box_fill(box: dict | None, width: int, height: int) -> str:
+    """ffmpeg chain: crop a fractional region, then fill width x height."""
+    b = box or {}
+    bx = max(0.0, min(1.0, float(b.get("x", 0.0))))
+    by = max(0.0, min(1.0, float(b.get("y", 0.0))))
+    bw = max(0.02, min(1.0 - bx, float(b.get("w", 1.0))))
+    bh = max(0.02, min(1.0 - by, float(b.get("h", 1.0))))
+    return (
+        f"crop=iw*{bw}:ih*{bh}:iw*{bx}:ih*{by},"
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}"
+    )
+
+
+def render_custom(
+    source: Path,
+    out_path: Path,
+    *,
+    start: float,
+    duration: float,
+    width: int = 1080,
+    height: int = 1920,
+    layout: str = "split",
+    facecam: dict | None = None,
+    game: dict | None = None,
+    segments: list[TranscriptSegment] | None = None,
+    burn_subtitles: bool = False,
+    title: str = "",
+) -> Path:
+    """Render one clip from an explicit trim window + crop regions (GUI editor).
+
+    layout "split": top half = `facecam` region, bottom half = `game` region.
+    layout "crop":  the whole 9:16 frame is the `game` region (or center crop).
+    Boxes are fractions {x,y,w,h} of the source frame; None = full frame.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    start = max(0.0, float(start))
+    duration = max(0.5, float(duration))
+
+    has_subs = False
+    srt_path = out_path.with_suffix(".srt")
+    if burn_subtitles and segments:
+        m = Moment(start=start, end=start + duration, category="", score=0.0,
+                   title=title or "clip", reason="")
+        has_subs = write_srt(m, segments, srt_path)
+
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(source), "-t", f"{duration:.2f}"]
+
+    if layout == "split":
+        h2 = height // 2
+        graph = (
+            f"[0:v]{_box_fill(facecam, width, h2)}[top];"
+            f"[0:v]{_box_fill(game, width, h2)}[bot];"
+            f"[top][bot]vstack=inputs=2[stacked]"
+        )
+        vlabel = "[stacked]"
+        if has_subs:
+            graph += f";[stacked]{_subtitles_filter(srt_path)}[vout]"
+            vlabel = "[vout]"
+        cmd += ["-filter_complex", graph, "-map", vlabel, "-map", "0:a?"]
+    else:  # single-region crop into full 9:16
+        chain = _box_fill(game, width, height)
+        if has_subs:
+            chain += f",{_subtitles_filter(srt_path)}"
+        cmd += ["-vf", chain]
+
+    tmp = out_path.with_suffix(".mp4.part")
+    cmd += [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-f", "mp4", str(tmp),
+    ]
+    subprocess.run(cmd, check=True)
+    os.replace(tmp, out_path)
+    return out_path

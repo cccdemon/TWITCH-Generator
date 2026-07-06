@@ -34,6 +34,8 @@
   <span class="muted"><span id="count">{{ clips|length }}</span> clip(s){% if usd is not none %} · ${{ "%.2f"|format(usd) }} Claude{% endif %}{% if src_mb %} · source {{ src_mb }} MB{% endif %}</span>
   <span id="progress" class="badge" style="display:none">⏳ in progress — clips appear as they render</span>
   <span style="flex:1"></span>
+  <a href="{{ base }}/edit/{{ vod }}"><button type="button">✂ Editor</button></a>
+  <a href="{{ base }}/facecam/{{ vod }}"><button type="button">Facecam</button></a>
   {% if src_mb %}
   <form method="post" action="{{ base }}/vods/{{ vod }}/free" onsubmit="return confirm('Delete the {{ src_mb }} MB source video + intermediates? Clips are kept.')">
     <button type="submit">Free {{ src_mb }} MB</button></form>
@@ -42,6 +44,7 @@
     <button type="submit" class="danger">Delete all</button></form>
 </header>
 <main>
+  {% if message %}<div style="background:#16223a;border:1px solid #244;color:#bfe;padding:10px 14px;border-radius:8px;margin-bottom:16px">{{ message }}</div>{% endif %}
   <div class="grid" id="grid">
     {% for c in clips %}
     <div class="clip" data-name="{{ c.name }}">

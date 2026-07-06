@@ -31,6 +31,7 @@
         <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">{{ g.label or ("VOD " ~ g.vod) }}</a>
           <small class="muted">· {{ g.count }} clip(s){% if g.usd is not none %} · ${{ "%.2f"|format(g.usd) }} Claude{% endif %}{% if g.src_mb %} · source {{ g.src_mb }} MB{% endif %}{% if g.label %} · id {{ g.vod }}{% endif %}</small></span>
         <a href="{{ base }}/clips/{{ g.vod }}"><button type="button">View</button></a>
+        <a href="{{ base }}/edit/{{ g.vod }}"><button type="button">✂ Edit</button></a>
         {% if g.src_mb %}
         <form method="post" action="{{ base }}/vods/{{ g.vod }}/free" onsubmit="return confirm('Delete the {{ g.src_mb }} MB source video + intermediates? Clips are kept.')">
           <button type="submit">Free {{ g.src_mb }} MB</button></form>
@@ -57,7 +58,8 @@ function groupRow(g) {
   const name = g.label || ('VOD ' + g.vod);
   return `<div class="row"><span style="flex:1"><a href="${BASE}/clips/${g.vod}">${name}</a> `+
     `<small class="muted">${meta}</small></span>`+
-    `<a href="${BASE}/clips/${g.vod}"><button type="button">View</button></a>${free}`+
+    `<a href="${BASE}/clips/${g.vod}"><button type="button">View</button></a>`+
+    `<a href="${BASE}/edit/${g.vod}"><button type="button">✂ Edit</button></a>${free}`+
     `<form method="post" action="${BASE}/vods/${g.vod}/delete" onsubmit="return confirm('Delete EVERYTHING for VOD ${g.vod}, including rendered clips? This cannot be undone.')"><button type="submit" class="danger">Delete all</button></form></div>`;
 }
 async function refresh() {

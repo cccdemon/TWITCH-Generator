@@ -155,6 +155,16 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     console.rule("[bold]7/8 FFmpeg — cut clips")
     c = cfg.get("clip", {})
+    facecam = c.get("facecam") or {}
+    if c.get("vertical", True) and c.get("layout", "split") == "split" and c.get("facecam_auto", True):
+        det = vision_stage.detect_facecam(
+            work, model=vcfg.get("model", "claude-sonnet-4-6"), meter=meter
+        )
+        if det:
+            facecam = det
+            console.print(f"[cyan]facecam auto-detected[/] {det}")
+        else:
+            console.print("facecam not auto-detected — using config box")
     clips = []
     for m in moments:
         cl = clip_stage.render_clip(
@@ -163,7 +173,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             width=c.get("width", 1080),
             height=c.get("height", 1920),
             layout=c.get("layout", "split"),
-            facecam=c.get("facecam") or {},
+            facecam=facecam,
             pad_start=c.get("pad_start", 1.0),
             pad_end=c.get("pad_end", 1.0),
             burn_subtitles=c.get("burn_subtitles", True),

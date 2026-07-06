@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Facecam — VOD {{ vod }}</title>
+<style>
+  :root { --bg:#0e0e12; --card:#1a1a22; --line:#2a2a35; --fg:#e6e6ea; --mut:#9a9aa8; --acc:#9146ff; --ok:#3ecf8e; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+  header h1 { font-size:18px; margin:0; } a { color:var(--acc); }
+  main { max-width:1000px; margin:0 auto; padding:24px; }
+  .muted { color:var(--mut); }
+  button { background:var(--acc); color:#fff; border:0; padding:10px 16px; border-radius:8px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .stage { position:relative; display:inline-block; max-width:100%; border:1px solid var(--line); border-radius:8px; overflow:hidden; user-select:none; touch-action:none; }
+  .stage img { display:block; max-width:100%; height:auto; }
+  #box { position:absolute; border:2px solid var(--ok); background:rgba(62,207,142,.18); box-sizing:border-box; cursor:move; }
+  #box .h { position:absolute; width:14px; height:14px; right:-7px; bottom:-7px; background:var(--ok); border-radius:3px; cursor:nwse-resize; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:16px; }
+  code { background:#11111a; padding:2px 6px; border-radius:6px; }
+</style>
+</head>
+<body>
+<header>
+  <a href="{{ base }}/clips/{{ vod }}">← clips</a>
+  <h1>Facecam picker — {{ label or ("VOD " ~ vod) }}</h1>
+</header>
+<main>
+  <p class="muted">Drag a rectangle over the streamer's webcam/facecam. That region becomes the top half of every vertical clip. Drag inside the box to move it, the corner handle to resize. Save, then retry the job to re-render.</p>
+
+  <div class="stage" id="stage">
+    <img id="frame" src="{{ base }}/frame/{{ vod }}" alt="source frame" draggable="false"
+         onerror="document.getElementById('err').style.display=''">
+    <div id="box" style="display:none"><div class="h"></div></div>
+  </div>
+  <p id="err" class="muted" style="display:none">No frame available — process this VOD first (frames get deleted when you "Free" a VOD).</p>
+
+  <form method="post" action="{{ base }}/facecam/{{ vod }}" class="row">
+    <input type="hidden" name="x" id="fx"><input type="hidden" name="y" id="fy">
+    <input type="hidden" name="w" id="fw"><input type="hidden" name="h" id="fh">
+    <span class="muted">box: <code id="readout">—</code></span>
+    <button type="submit" id="save" disabled>Save facecam box</button>
+    <a href="{{ base }}/clips/{{ vod }}"><button type="button" class="ghost">Cancel</button></a>
+  </form>
+</main>
+<script>
+const stage = document.getElementById('stage');
+const img = document.getElementById('frame');
+const box = document.getElementById('box');
+const handle = box.querySelector('.h');
+const readout = document.getElementById('readout');
+const save = document.getElementById('save');
+const initial = {{ box|tojson if box else 'null' }};
+
+let mode = null, sx = 0, sy = 0, start = null;
+
+function imgRect() { return img.getBoundingClientRect(); }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// pixel box (relative to image) -> render + hidden fields + readout
+function render(px) {
+  const r = imgRect();
+  px.x = clamp(px.x, 0, r.width);  px.y = clamp(px.y, 0, r.height);
+  px.w = clamp(px.w, 8, r.width - px.x); px.h = clamp(px.h, 8, r.height - px.y);
+  box.style.display = '';
+  box.style.left = px.x + 'px'; box.style.top = px.y + 'px';
+  box.style.width = px.w + 'px'; box.style.height = px.h + 'px';
+  const fx = px.x / r.width, fy = px.y / r.height, fw = px.w / r.width, fh = px.h / r.height;
+  document.getElementById('fx').value = fx.toFixed(4);
+  document.getElementById('fy').value = fy.toFixed(4);
+  document.getElementById('fw').value = fw.toFixed(4);
+  document.getElementById('fh').value = fh.toFixed(4);
+  readout.textContent = `x=${fx.toFixed(2)} y=${fy.toFixed(2)} w=${fw.toFixed(2)} h=${fh.toFixed(2)}`;
+  save.disabled = false;
+  box._px = px;
+}
+
+function evPos(e) {
+  const r = imgRect();
+  const p = (e.touches && e.touches[0]) || e;
+  return { x: p.clientX - r.left, y: p.clientY - r.top };
+}
+
+function down(e) {
+  const p = evPos(e);
+  if (e.target === handle) { mode = 'resize'; }
+  else if (e.target === box) { mode = 'move'; start = { ...box._px }; sx = p.x; sy = p.y; }
+  else { mode = 'draw'; sx = p.x; sy = p.y; render({ x: p.x, y: p.y, w: 8, h: 8 }); }
+  e.preventDefault();
+}
+function move(e) {
+  if (!mode) return;
+  const p = evPos(e);
+  if (mode === 'draw' || mode === 'resize') {
+    const ox = mode === 'draw' ? sx : box._px.x;
+    const oy = mode === 'draw' ? sy : box._px.y;
+    render({ x: Math.min(ox, p.x), y: Math.min(oy, p.y), w: Math.abs(p.x - ox), h: Math.abs(p.y - oy) });
+  } else if (mode === 'move') {
+    render({ x: start.x + (p.x - sx), y: start.y + (p.y - sy), w: start.w, h: start.h });
+  }
+  e.preventDefault();
+}
+function up() { mode = null; }
+
+stage.addEventListener('mousedown', down);
+window.addEventListener('mousemove', move);
+window.addEventListener('mouseup', up);
+stage.addEventListener('touchstart', down, { passive: false });
+window.addEventListener('touchmove', move, { passive: false });
+window.addEventListener('touchend', up);
+
+// Seed with the current/auto box once the image has laid out.
+function seed() {
+  if (!initial) return;
+  const r = imgRect();
+  render({ x: initial.x * r.width, y: initial.y * r.height, w: initial.w * r.width, h: initial.h * r.height });
+}
+if (img.complete) seed(); else img.addEventListener('load', seed);
+</script>
+</body>
+</html>

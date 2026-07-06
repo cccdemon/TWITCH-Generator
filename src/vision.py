@@ -139,6 +139,105 @@ def _parse(msg: Any, ts_by_index: dict[int, float], categories: list[str]) -> li
     return res
 
 
+_FACECAM_TOOL = {
+    "name": "report_facecam",
+    "description": "Report the location of the streamer's webcam/facecam overlay box.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "present": {"type": "boolean", "description": "true if a facecam overlay is visible"},
+            "x": {"type": "number", "description": "left edge, fraction of width 0..1"},
+            "y": {"type": "number", "description": "top edge, fraction of height 0..1"},
+            "w": {"type": "number", "description": "box width, fraction of width 0..1"},
+            "h": {"type": "number", "description": "box height, fraction of height 0..1"},
+        },
+        "required": ["present"],
+    },
+}
+
+
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def detect_facecam(work: Path, model: str, meter=None, samples: int = 6) -> dict | None:
+    """Ask Claude Vision to locate the facecam box (fractions), or None if absent.
+
+    Reads the frames already extracted for the vision stage; picks a few spread
+    across the VOD (the cam is a static overlay, so a small sample is plenty).
+    Result cached in data/<vod>/facecam.json.
+    """
+    cache = work / "facecam.json"
+    if cache.exists():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            return data or None  # {} cached => "no facecam", return None
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    imgs = sorted((work / "frames").glob("f_*.jpg"))
+    if not imgs:
+        return None
+    step = max(1, len(imgs) // samples)
+    picks = imgs[::step][:samples]
+
+    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
+    content: list[dict[str, Any]] = [{
+        "type": "text",
+        "text": (
+            "These frames are from ONE Twitch stream. A streamer webcam/facecam is "
+            "usually a fixed rectangular overlay in a corner (a person on camera), "
+            "distinct from the game. Locate that facecam box and return its bounding "
+            "box as fractions of the frame (x,y = top-left corner, w,h = size). If no "
+            "facecam/person overlay is present, set present=false."
+        ),
+    }]
+    for p in picks:
+        content.append(_img_block(p))
+
+    try:
+        msg = client.messages.create(
+            model=model,
+            max_tokens=512,
+            tools=[_FACECAM_TOOL],
+            tool_choice={"type": "tool", "name": "report_facecam"},
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception:  # noqa: BLE001 — detection is best-effort; fall back to config
+        return None
+    if meter is not None:
+        meter.add(model, msg.usage)
+
+    box: dict | None = None
+    for block in msg.content:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        inp = block.input
+        if not inp.get("present"):
+            break
+        try:
+            x = min(1.0, max(0.0, float(inp["x"])))
+            y = min(1.0, max(0.0, float(inp["y"])))
+            w = min(1.0, max(0.05, float(inp["w"])))
+            h = min(1.0, max(0.05, float(inp["h"])))
+        except (KeyError, TypeError, ValueError):
+            break
+        # clamp box to stay inside the frame
+        w = min(w, 1.0 - x)
+        h = min(h, 1.0 - y)
+        box = {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
+        break
+
+    try:
+        cache.write_text(json.dumps(box or {}), encoding="utf-8")
+    except OSError:
+        pass
+    return box
+
+
 def run(source: Path, work: Path, cfg: dict, meter=None) -> list[VisionFrame]:
     v = cfg.get("vision", {})
     cache = work / "vision.json"

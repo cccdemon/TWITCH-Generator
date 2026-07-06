@@ -54,6 +54,7 @@
         <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">{{ g.label or ("VOD " ~ g.vod) }}</a>
           <small class="muted">· {{ g.count }} clip(s){% if g.usd is not none %} · ${{ "%.2f"|format(g.usd) }} Claude{% endif %}{% if g.src_mb %} · source {{ g.src_mb }} MB{% endif %}{% if g.label %} · id {{ g.vod }}{% endif %}</small></span>
         <a href="{{ base }}/clips/{{ g.vod }}"><button type="button" class="ghost">View</button></a>
+        <a href="{{ base }}/edit/{{ g.vod }}"><button type="button" class="ghost">✂ Edit</button></a>
         {% if g.src_mb %}
         <form method="post" action="{{ base }}/vods/{{ g.vod }}/free" style="margin:0" onsubmit="return confirm('Delete the {{ g.src_mb }} MB source video + intermediates? Clips are kept.')">
           <button type="submit" class="ghost">Free {{ g.src_mb }} MB</button></form>
