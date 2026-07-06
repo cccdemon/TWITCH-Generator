@@ -81,13 +81,15 @@ def probe_duration(media: Path) -> float:
 
 # ---------------------------------------------------------------- per-run state
 
-def write_run(work: Path, *, started: float, vod_seconds: float, eta_seconds: float) -> None:
+def write_run(work: Path, *, started: float, vod_seconds: float,
+              eta_seconds: float, est_cost: float = 0.0) -> None:
     try:
         (work / "run.json").write_text(
             json.dumps({
                 "started": started,
                 "vod_seconds": round(vod_seconds, 1),
                 "eta_seconds": round(eta_seconds, 1),
+                "est_cost": round(est_cost, 4),
             }),
             encoding="utf-8",
         )

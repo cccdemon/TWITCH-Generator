@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -47,6 +48,15 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     console.rule("[bold]1/8 Twitch — resolve VOD")
     info = twitch_stage.fetch_vod_info(vod_url)
     work = _vod_workdir(info.vod_id)
+    # Persist VOD metadata early so the web UI can label jobs/clips by stream.
+    try:
+        (work / "info.json").write_text(
+            json.dumps({"vod_id": info.vod_id, "title": info.title,
+                        "streamer": info.streamer, "url": info.url}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
     console.print(f"VOD {info.vod_id} — {info.title or '(no title)'} — {info.streamer}")
 
     console.rule("[bold]1b — download")
@@ -56,13 +66,15 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     )
     console.print(f"media: {media}")
 
-    # Predict total processing time from VOD length (learned factor).
+    # Predict total processing time + Claude cost from VOD length (learned).
     vod_seconds = info.duration or timing.probe_duration(media)
     eta = timing.estimate_seconds(vod_seconds)
+    est_cost = pricing.estimate_cost(vod_seconds)
     if eta:
-        timing.write_run(work, started=t0, vod_seconds=vod_seconds, eta_seconds=eta)
+        timing.write_run(work, started=t0, vod_seconds=vod_seconds,
+                         eta_seconds=eta, est_cost=est_cost)
         console.print(
-            f"[cyan]estimated processing time ~{_fmt_dur(eta)}[/] "
+            f"[cyan]estimated ~{_fmt_dur(eta)} · ~${est_cost:.2f} Claude[/] "
             f"(VOD {_fmt_dur(vod_seconds)}, factor {timing.factor():.2f})"
         )
 
@@ -163,6 +175,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         console.rule("[bold]8/8 upload — SKIPPED")
         elapsed = time.time() - t0
         timing.record(vod_seconds, elapsed)
+        pricing.record_cost(vod_seconds, meter.usd)
         console.print(
             f"[green]done — {len(clips)} clips in {work / 'clips'} "
             f"(took {_fmt_dur(elapsed)})"
@@ -180,6 +193,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     elapsed = time.time() - t0
     timing.record(vod_seconds, elapsed)
+    pricing.record_cost(vod_seconds, meter.usd)
     console.print(f"[green]done — {len(clips)} clips (took {_fmt_dur(elapsed)})")
     return 0
 

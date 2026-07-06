@@ -88,3 +88,52 @@ def load_cost(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+
+
+# ---------------------------------------------------- cost prediction (learned)
+# Claude spend scales with VOD length (transcript size + frame count). We learn
+# USD-per-VOD-second in data/cost_factor.json, seeded and refined (EMA) per job.
+from .config import data_dir  # noqa: E402  (kept local to this section)
+
+_DEFAULT_USD_PER_SEC = 0.0006   # ~$0.06 per 100s VOD; self-calibrates after run 1
+_COST_EMA_ALPHA = 0.3
+_COST_MIN, _COST_MAX = 0.0, 0.05   # clamp observed $/s to sane range
+
+
+def _cost_factor_path() -> Path:
+    return data_dir() / "cost_factor.json"
+
+
+def _load_cost_factor() -> dict:
+    p = _cost_factor_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"usd_per_sec": _DEFAULT_USD_PER_SEC, "samples": 0}
+
+
+def estimate_cost(vod_seconds: float) -> float:
+    """Predicted Claude cost (USD) for a VOD of `vod_seconds`."""
+    if vod_seconds <= 0:
+        return 0.0
+    return round(vod_seconds * float(_load_cost_factor().get("usd_per_sec", _DEFAULT_USD_PER_SEC)), 4)
+
+
+def record_cost(vod_seconds: float, usd: float) -> None:
+    """Fold a completed job's actual cost into the learned $/s factor (EMA)."""
+    if vod_seconds <= 0 or usd <= 0:
+        return
+    observed = max(_COST_MIN, min(_COST_MAX, usd / vod_seconds))
+    state = _load_cost_factor()
+    if state.get("samples", 0) <= 0:
+        new = observed
+    else:
+        new = state["usd_per_sec"] * (1 - _COST_EMA_ALPHA) + observed * _COST_EMA_ALPHA
+    state["usd_per_sec"] = round(new, 8)
+    state["samples"] = int(state.get("samples", 0)) + 1
+    try:
+        _cost_factor_path().write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except OSError:
+        pass

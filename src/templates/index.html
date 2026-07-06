@@ -51,8 +51,8 @@
     {% if clip_groups %}
       {% for g in clip_groups %}
       <div class="vod" style="align-items:center">
-        <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">VOD {{ g.vod }}</a>
-          <small class="muted">· {{ g.count }} clip(s){% if g.usd is not none %} · ${{ "%.2f"|format(g.usd) }} Claude{% endif %}{% if g.src_mb %} · source {{ g.src_mb }} MB{% endif %}</small></span>
+        <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">{{ g.label or ("VOD " ~ g.vod) }}</a>
+          <small class="muted">· {{ g.count }} clip(s){% if g.usd is not none %} · ${{ "%.2f"|format(g.usd) }} Claude{% endif %}{% if g.src_mb %} · source {{ g.src_mb }} MB{% endif %}{% if g.label %} · id {{ g.vod }}{% endif %}</small></span>
         <a href="{{ base }}/clips/{{ g.vod }}"><button type="button" class="ghost">View</button></a>
         {% if g.src_mb %}
         <form method="post" action="{{ base }}/vods/{{ g.vod }}/free" style="margin:0" onsubmit="return confirm('Delete the {{ g.src_mb }} MB source video + intermediates? Clips are kept.')">
@@ -158,8 +158,8 @@
         {% for j in jobs %}
         <tr>
           <td>{{ j.id }}</td>
-          <td>{{ j.title or j.vod }}</td>
-          <td class="st-{{ j.status }}">{{ j.status }}{% if j.id in job_etas %} <small class="muted">~{{ (job_etas[j.id] / 60)|round(0, 'ceil')|int }}m left</small>{% endif %}{% if j.error %} <small>({{ j.error }})</small>{% endif %}</td>
+          <td>{{ job_labels.get(j.id) or j.title or j.vod }}{% if job_labels.get(j.id) %}<br><small class="muted">id {{ j.vod }}</small>{% endif %}</td>
+          <td class="st-{{ j.status }}">{{ j.status }}{% if j.id in job_etas %} <small class="muted">~{{ (job_etas[j.id] / 60)|round(0, 'ceil')|int }}m left</small>{% endif %}{% if j.id in job_costs %} <small class="muted">~${{ "%.2f"|format(job_costs[j.id]) }}</small>{% endif %}{% if j.error %} <small>({{ j.error }})</small>{% endif %}</td>
           <td class="muted">{{ j.created }}</td>
           <td>
             <a href="{{ base }}/jobs/{{ j.id }}">log</a>
@@ -196,8 +196,12 @@ async function refresh() {
         ? `<form method="post" action="${BASE}/jobs/${j.id}/retry" style="display:inline"><button type="submit" class="ghost">retry</button></form>`
         : '';
       const eta = (j.eta != null) ? ` <small class="muted">~${Math.ceil(j.eta/60)}m left</small>` : '';
-      return `<tr><td>${j.id}</td><td>${j.title||j.vod}</td>`+
-      `<td class="st-${j.status}">${j.status}${eta}${j.error?` <small>(${j.error})</small>`:''}</td>`+
+      const cost = (j.est_cost != null) ? ` <small class="muted">~$${j.est_cost.toFixed(2)}</small>` : '';
+      const name = j.label
+        ? `${j.label}<br><small class="muted">id ${j.vod}</small>`
+        : (j.title || j.vod);
+      return `<tr><td>${j.id}</td><td>${name}</td>`+
+      `<td class="st-${j.status}">${j.status}${eta}${cost}${j.error?` <small>(${j.error})</small>`:''}</td>`+
       `<td class="muted">${j.created}</td><td><a href="${BASE}/jobs/${j.id}">log</a> ${action}</td></tr>`;
     }).join('') : '<tr><td colspan="5" class="muted">No jobs yet.</td></tr>';
     if (busy) setTimeout(refresh, 3000);

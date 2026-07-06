@@ -29,7 +29,8 @@
 <body>
 <header>
   <a href="{{ base }}/clips">← all videos</a>
-  <h1>VOD {{ vod }}</h1>
+  <h1>{{ label or ("VOD " ~ vod) }}</h1>
+  {% if label %}<span class="muted">id {{ vod }}</span>{% endif %}
   <span class="muted"><span id="count">{{ clips|length }}</span> clip(s){% if usd is not none %} · ${{ "%.2f"|format(usd) }} Claude{% endif %}{% if src_mb %} · source {{ src_mb }} MB{% endif %}</span>
   <span id="progress" class="badge" style="display:none">⏳ in progress — clips appear as they render</span>
   <span style="flex:1"></span>

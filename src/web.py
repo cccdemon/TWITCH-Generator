@@ -29,7 +29,7 @@ from .config import data_dir, root_path
 from .jobs import manager
 
 # What to keep when "freeing" a VOD (delete the heavy source, keep the output).
-_FREE_KEEP = {"clips", "moments.json", "cost.json"}
+_FREE_KEEP = {"clips", "moments.json", "cost.json", "info.json"}
 from .settings_store import (
     SETTING_KEYS,
     apply_settings,
@@ -41,6 +41,22 @@ from .settings_store import (
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 BASE = root_path()  # external prefix, e.g. "/vod"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _vod_label(vod_id: str) -> str | None:
+    """'Streamer — Stream title' from info.json, or None if not resolved yet."""
+    p = data_dir() / vod_id / "info.json"
+    if not p.exists():
+        return None
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    title = (m.get("title") or "").strip()
+    streamer = (m.get("streamer") or "").strip()
+    if title and streamer:
+        return f"{streamer} — {title}"
+    return title or streamer or None
 
 
 def _source_mb(vod_dir: Path) -> float:
@@ -64,6 +80,7 @@ def _vod_groups() -> list[dict]:
             out.append({
                 "vod": vod_dir.name,
                 "count": n,
+                "label": _vod_label(vod_dir.name),
                 "usd": cost["usd"] if cost else None,
                 "src_mb": _source_mb(vod_dir),
             })
@@ -89,6 +106,34 @@ def _job_etas() -> dict[str, float]:
         left = timing.remaining_seconds(vid)
         if left is not None:
             out[j.id] = round(left)
+    return out
+
+
+def _job_labels() -> dict[str, str]:
+    """job_id -> 'Streamer — Title', once the VOD has been resolved."""
+    out: dict[str, str] = {}
+    for j in manager.list():
+        vid = _job_vod_id(j.vod)
+        if not vid:
+            continue
+        label = _vod_label(vid)
+        if label:
+            out[j.id] = label
+    return out
+
+
+def _job_costs() -> dict[str, float]:
+    """job_id -> predicted Claude cost (USD), for jobs with a run.json estimate."""
+    out: dict[str, float] = {}
+    for j in manager.list():
+        if j.status not in ("running", "queued"):
+            continue
+        vid = _job_vod_id(j.vod)
+        if not vid:
+            continue
+        run = timing.read_run(vid)
+        if run and run.get("est_cost"):
+            out[j.id] = round(float(run["est_cost"]), 2)
     return out
 
 
@@ -253,6 +298,8 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "public_url": oauth.public_url(),
             "clip_groups": _vod_groups(),
             "job_etas": _job_etas(),
+            "job_labels": _job_labels(),
+            "job_costs": _job_costs(),
         },
     )
 
@@ -326,10 +373,12 @@ def retry_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
 @app.get("/api/jobs")
 def api_jobs(_: str = Depends(current_user)) -> JSONResponse:
     etas = _job_etas()
+    labels = _job_labels()
+    costs = _job_costs()
     return JSONResponse([
         {"id": j.id, "vod": j.vod, "title": j.title, "status": j.status,
          "created": j.created, "finished": j.finished, "error": j.error,
-         "eta": etas.get(j.id)}
+         "eta": etas.get(j.id), "label": labels.get(j.id), "est_cost": costs.get(j.id)}
         for j in manager.list()
     ])
 
@@ -386,6 +435,7 @@ def clips_vod(request: Request, vod_id: str, _: str = Depends(current_user)) -> 
         request, "clips_vod.html",
         {
             "base": BASE, "vod": vod_id, "clips": clips,
+            "label": _vod_label(vod_id),
             "usd": cost["usd"] if cost else None,
             "src_mb": _source_mb(data_dir() / vod_id),
         },
