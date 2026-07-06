@@ -17,7 +17,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -298,8 +300,6 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "vods": vods,
             "message": message,
             "users_configured": bool(_load_users()),
-            "oauth": oauth.all_status(),
-            "public_url": oauth.public_url(),
             "clip_groups": _vod_groups(),
             "job_etas": _job_etas(),
             "job_labels": _job_labels(),
@@ -488,16 +488,63 @@ def _load_facecam(vod_id: str) -> dict | None:
     return None
 
 
+def _file_iter(path: Path, start: int, end: int, chunk: int = 1 << 20):
+    """Yield bytes [start, end] of a file in chunks (for HTTP Range responses)."""
+    with open(path, "rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            data = f.read(min(chunk, remaining))
+            if not data:
+                break
+            remaining -= len(data)
+            yield data
+
+
 @app.get("/source/{vod_id}")
-def source_video(vod_id: str, _: str = Depends(current_user)) -> FileResponse:
-    """Serve the raw VOD (Range-capable) so the editor can scrub/seek it."""
+def source_video(vod_id: str, request: Request, _: str = Depends(current_user)):
+    """Serve the raw VOD with HTTP Range (206) so the editor can scrub/seek it.
+
+    Starlette's FileResponse doesn't reliably honour Range, and large VODs are
+    usually not faststart — without 206 the browser can't start playback until
+    the whole file arrives. So we handle Range ourselves.
+    """
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
     src = (data_dir() / vod_id / f"{vod_id}.mp4").resolve()
     root = (data_dir() / vod_id).resolve()
     if not str(src).startswith(str(root) + os.sep) or not src.is_file():
         raise HTTPException(404, "source video not available (deleted?)")
-    return FileResponse(src, media_type="video/mp4")
+
+    size = src.stat().st_size
+    range_header = request.headers.get("range")
+    if not range_header:
+        return FileResponse(src, media_type="video/mp4",
+                            headers={"Accept-Ranges": "bytes"})
+
+    # "bytes=START-END" (either side may be blank)
+    try:
+        unit, _, rng = range_header.partition("=")
+        if unit.strip() != "bytes":
+            raise ValueError
+        start_s, _, end_s = rng.partition("-")
+        start = int(start_s) if start_s else 0
+        end = int(end_s) if end_s else size - 1
+    except ValueError:
+        raise HTTPException(416, "invalid range")
+    end = min(end, size - 1)
+    if start < 0 or start > end or start >= size:
+        return JSONResponse({"detail": "range not satisfiable"}, status_code=416,
+                            headers={"Content-Range": f"bytes */{size}"})
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+        "Cache-Control": "no-store",
+    }
+    return StreamingResponse(_file_iter(src, start, end), status_code=206,
+                             headers=headers, media_type="video/mp4")
 
 
 @app.get("/edit/{vod_id}", response_class=HTMLResponse)

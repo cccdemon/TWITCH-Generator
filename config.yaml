@@ -13,7 +13,7 @@ whisper:
   device: "cpu"          # "cuda" with a GPU image
   compute_type: "int8"   # cpu: int8 ; gpu: float16
   language: de           # null = autodetect, or "en"/"de"
-  cpu_threads: 1         # 1 thread leaves a CPU free so the web UI stays responsive
+  cpu_threads: 3         # cores-1 (box has 4): fast transcription, 1 core free for UI/ffmpeg. nice -19 keeps the web responsive under load.
   chunk_seconds: 1800    # transcribe in 30-min chunks → bounded RAM on long VODs
 
 analyze:

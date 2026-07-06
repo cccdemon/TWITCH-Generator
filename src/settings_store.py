@@ -13,20 +13,11 @@ from pathlib import Path
 from .config import data_dir
 
 # Editable keys exposed in the web UI. (key, label, secret?)
+# Upload runs download-first (post clips manually), so no OAuth/platform creds here.
 SETTING_KEYS: list[tuple[str, str, bool]] = [
     ("ANTHROPIC_API_KEY", "Anthropic API Key", True),
     ("TWITCH_CLIENT_ID", "Twitch Client ID", True),
     ("TWITCH_CLIENT_SECRET", "Twitch Client Secret", True),
-    # Public base URL of this app (OAuth redirect target), e.g.
-    # https://suite.raumdock.org/vod
-    ("PUBLIC_URL", "Public base URL (for OAuth redirects)", False),
-    # Developer-app credentials for the in-app OAuth Connect flows.
-    ("YOUTUBE_CLIENT_ID", "YouTube/Google OAuth Client ID", False),
-    ("YOUTUBE_CLIENT_SECRET", "YouTube/Google OAuth Client Secret", True),
-    ("TIKTOK_CLIENT_KEY", "TikTok Client Key", False),
-    ("TIKTOK_CLIENT_SECRET", "TikTok Client Secret", True),
-    ("FACEBOOK_APP_ID", "Facebook App ID (Instagram)", False),
-    ("FACEBOOK_APP_SECRET", "Facebook App Secret (Instagram)", True),
 ]
 
 _KEYS = {k for k, _, _ in SETTING_KEYS}
