@@ -518,19 +518,31 @@ def _proxy_path(vod_id: str) -> Path:
 def _build_proxy(vod_id: str) -> None:
     src = data_dir() / vod_id / f"{vod_id}.mp4"
     out = _proxy_path(vod_id)
-    tmp = out.with_suffix(".mp4.part")
+    tmp = out.parent / "edit_proxy.part.mp4"
+    state = "error: unknown"
     try:
-        subprocess.run(
-            ["nice", "-n", "19", "ffmpeg", "-y", "-nostdin", "-i", str(src),
+        p = subprocess.run(
+            ["ffmpeg", "-y", "-nostdin", "-i", str(src),
              "-vf", "scale=-2:480", "-c:v", "libx264", "-preset", "veryfast",
              "-crf", "28", "-c:a", "aac", "-b:a", "96k",
              "-movflags", "+faststart", str(tmp)],
-            check=True, capture_output=True,
+            capture_output=True, text=True,
         )
-        os.replace(tmp, out)
-        state = "ready"
-    except Exception:  # noqa: BLE001
-        state = "error"
+        if p.returncode == 0 and tmp.exists():
+            os.replace(tmp, out)
+            state = "ready"
+        else:
+            try:
+                (out.parent / "proxy_build.log").write_text(p.stderr or "", encoding="utf-8")
+            except OSError:
+                pass
+            tail = [ln for ln in (p.stderr or "").splitlines() if ln.strip()]
+            state = "error: " + (tail[-1][:200] if tail else f"ffmpeg exit {p.returncode}")
+            tmp.unlink(missing_ok=True)
+    except FileNotFoundError:
+        state = "error: ffmpeg not found"
+    except Exception as e:  # noqa: BLE001
+        state = f"error: {e}"
         tmp.unlink(missing_ok=True)
     with _proxy_lock:
         _proxy_state[vod_id] = state
@@ -543,7 +555,10 @@ def proxy_status(vod_id: str, _: str = Depends(current_user)) -> JSONResponse:
     if _proxy_path(vod_id).exists():
         return JSONResponse({"state": "ready"})
     with _proxy_lock:
-        return JSONResponse({"state": _proxy_state.get(vod_id, "none")})
+        s = _proxy_state.get(vod_id, "none")
+    if s.startswith("error"):
+        return JSONResponse({"state": "error", "detail": s[7:] if len(s) > 7 else s})
+    return JSONResponse({"state": s})
 
 
 @app.post("/proxy/{vod_id}")

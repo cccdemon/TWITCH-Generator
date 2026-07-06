@@ -251,7 +251,7 @@ async function pollProxy(){
   try {
     const r = await fetch(`${BASE}/proxy/${VOD}/status`); const d = await r.json();
     if(d.state === 'ready'){ clearInterval(pollTimer); loadVideo(); }
-    else if(d.state === 'error'){ clearInterval(pollTimer); prevMsg('Preview build failed. <button id="retry">Retry</button>'); document.getElementById('retry').onclick = startBuild; }
+    else if(d.state === 'error'){ clearInterval(pollTimer); prevMsg('Preview build failed:<br><small style="color:var(--mut)">'+(d.detail||'unknown')+'</small><br><button id="retry">Retry</button>'); document.getElementById('retry').onclick = startBuild; }
   } catch(e) {}
 }
 async function startBuild(){
