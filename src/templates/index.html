@@ -154,7 +154,16 @@
           <td>{{ j.title or j.vod }}</td>
           <td class="st-{{ j.status }}">{{ j.status }}{% if j.error %} <small>({{ j.error }})</small>{% endif %}</td>
           <td class="muted">{{ j.created }}</td>
-          <td><a href="{{ base }}/jobs/{{ j.id }}">log</a></td>
+          <td>
+            <a href="{{ base }}/jobs/{{ j.id }}">log</a>
+            {% if j.status in ('queued', 'running') %}
+            <form method="post" action="{{ base }}/jobs/{{ j.id }}/cancel" style="display:inline">
+              <button type="submit" class="ghost">cancel</button></form>
+            {% elif j.status in ('error', 'cancelled', 'interrupted') %}
+            <form method="post" action="{{ base }}/jobs/{{ j.id }}/retry" style="display:inline">
+              <button type="submit" class="ghost">retry</button></form>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
         <tr><td colspan="5" class="muted">No jobs yet.</td></tr>
@@ -173,11 +182,16 @@ async function refresh() {
     const jobs = await r.json();
     const busy = jobs.some(j => j.status === 'running' || j.status === 'queued');
     const tb = document.querySelector('#jobs tbody');
-    tb.innerHTML = jobs.length ? jobs.map(j =>
-      `<tr><td>${j.id}</td><td>${j.title||j.vod}</td>`+
+    tb.innerHTML = jobs.length ? jobs.map(j => {
+      const action = (j.status === 'queued' || j.status === 'running')
+        ? `<form method="post" action="${BASE}/jobs/${j.id}/cancel" style="display:inline"><button type="submit" class="ghost">cancel</button></form>`
+        : (['error', 'cancelled', 'interrupted'].includes(j.status))
+        ? `<form method="post" action="${BASE}/jobs/${j.id}/retry" style="display:inline"><button type="submit" class="ghost">retry</button></form>`
+        : '';
+      return `<tr><td>${j.id}</td><td>${j.title||j.vod}</td>`+
       `<td class="st-${j.status}">${j.status}${j.error?` <small>(${j.error})</small>`:''}</td>`+
-      `<td class="muted">${j.created}</td><td><a href="${BASE}/jobs/${j.id}">log</a></td></tr>`
-    ).join('') : '<tr><td colspan="5" class="muted">No jobs yet.</td></tr>';
+      `<td class="muted">${j.created}</td><td><a href="${BASE}/jobs/${j.id}">log</a> ${action}</td></tr>`;
+    }).join('') : '<tr><td colspan="5" class="muted">No jobs yet.</td></tr>';
     if (busy) setTimeout(refresh, 3000);
   } catch (e) {}
 }

@@ -61,6 +61,18 @@ clip:
   vertical: true
   width: 1080
   height: 1920
+  # Vertical composition:
+  #   "split"  — top half = streamer facecam, bottom half = game content (center-crop).
+  #   "crop"   — plain center-crop of the source into 9:16 (old behaviour).
+  # Only used when vertical: true.
+  layout: split
+  # Facecam region in the SOURCE frame, as fractions (0..1) of width/height.
+  # Defaults assume a webcam box in the TOP-RIGHT corner — tune per streamer.
+  facecam:
+    x: 0.78   # left edge of the cam box (fraction of source width)
+    y: 0.0    # top edge  (fraction of source height)
+    w: 0.22   # box width  (fraction of source width)
+    h: 0.22   # box height (fraction of source height)
   # Pad seconds added before/after the LLM-marked window.
   pad_start: 1.0
   pad_end: 1.0

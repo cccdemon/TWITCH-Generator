@@ -45,6 +45,31 @@ def _escape_for_filter(path: Path) -> str:
     return p.replace(":", "\\:")
 
 
+def _subtitles_filter(srt_path: Path) -> str:
+    return (
+        f"subtitles={_escape_for_filter(srt_path)}:"
+        "force_style='FontSize=18,Outline=2,Alignment=2,MarginV=60'"
+    )
+
+
+def _split_filtergraph(width: int, height: int, facecam: dict) -> str:
+    """filter_complex: top half = facecam region, bottom half = center-cropped game."""
+    h2 = height // 2
+    fx = float(facecam.get("x", 0.78))
+    fy = float(facecam.get("y", 0.0))
+    fw = float(facecam.get("w", 0.22))
+    fh = float(facecam.get("h", 0.22))
+    fill = (
+        f"scale={width}:{h2}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{h2}"
+    )
+    return (
+        f"[0:v]crop=iw*{fw}:ih*{fh}:iw*{fx}:ih*{fy},{fill}[top];"
+        f"[0:v]{fill}[bot];"
+        f"[top][bot]vstack=inputs=2[stacked]"
+    )
+
+
 def render_clip(
     source: Path,
     moment: Moment,
@@ -54,6 +79,8 @@ def render_clip(
     vertical: bool,
     width: int,
     height: int,
+    layout: str = "split",
+    facecam: dict | None = None,
     pad_start: float,
     pad_end: float,
     burn_subtitles: bool,
@@ -66,13 +93,6 @@ def render_clip(
     start = max(0.0, moment.start - pad_start)
     duration = (moment.end + pad_end) - start
 
-    filters: list[str] = []
-    if vertical:
-        filters.append(
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height}"
-        )
-
     srt_path = out_dir / f"{name}.srt"
     has_subs = False
     if burn_subtitles:
@@ -83,11 +103,8 @@ def render_clip(
             title=moment.title, reason=moment.reason,
         )
         has_subs = write_srt(offset_moment, segments, srt_path)
-        if has_subs:
-            filters.append(
-                f"subtitles={_escape_for_filter(srt_path)}:"
-                "force_style='FontSize=18,Outline=2,Alignment=2,MarginV=60'"
-            )
+
+    use_split = vertical and layout == "split"
 
     cmd = [
         "ffmpeg", "-y",
@@ -95,8 +112,27 @@ def render_clip(
         "-i", str(source),
         "-t", f"{duration:.2f}",
     ]
-    if filters:
-        cmd += ["-vf", ",".join(filters)]
+
+    if use_split:
+        graph = _split_filtergraph(width, height, facecam or {})
+        if has_subs:
+            graph += f";[stacked]{_subtitles_filter(srt_path)}[vout]"
+            vlabel = "[vout]"
+        else:
+            vlabel = "[stacked]"
+        cmd += ["-filter_complex", graph, "-map", vlabel, "-map", "0:a?"]
+    else:
+        filters: list[str] = []
+        if vertical:  # layout == "crop": plain center-crop into 9:16
+            filters.append(
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height}"
+            )
+        if has_subs:
+            filters.append(_subtitles_filter(srt_path))
+        if filters:
+            cmd += ["-vf", ",".join(filters)]
+
     cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",

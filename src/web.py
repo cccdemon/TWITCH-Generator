@@ -232,6 +232,21 @@ async def create_jobs(request: Request, _: str = Depends(current_user)) -> Redir
     return RedirectResponse(f"{BASE}/", status_code=303)
 
 
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
+    manager.cancel(job_id)
+    return RedirectResponse(f"{BASE}/", status_code=303)
+
+
+@app.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, "no such job")
+    manager.retry(job_id)
+    return RedirectResponse(f"{BASE}/", status_code=303)
+
+
 @app.get("/api/jobs")
 def api_jobs(_: str = Depends(current_user)) -> JSONResponse:
     return JSONResponse([

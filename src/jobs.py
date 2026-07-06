@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -26,12 +27,16 @@ class Job:
     id: str
     vod: str
     no_upload: bool
-    status: str = "queued"            # queued | running | done | error | interrupted
+    status: str = "queued"            # queued | running | done | error | interrupted | cancelled
     created: str = ""
     finished: str = ""
     title: str = ""
     error: str = ""
     _buf: io.StringIO = field(default_factory=io.StringIO)
+    # runtime-only handles (not persisted)
+    _proc: object = field(default=None, repr=False, compare=False)
+    _future: object = field(default=None, repr=False, compare=False)
+    _cancelled: bool = field(default=False, repr=False, compare=False)
 
     @property
     def log(self) -> str:
@@ -111,8 +116,40 @@ class JobManager:
             self._jobs[job.id] = job
             self._order.append(job.id)
         self._persist()
-        self._pool.submit(self._run, job)
+        job._future = self._pool.submit(self._run, job)
         return job
+
+    def cancel(self, job_id: str) -> bool:
+        """Cancel a queued or running job. Returns True if a cancel was applied."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return False
+        job._cancelled = True
+        # Queued and not yet started -> pull it from the pool.
+        if job.status == "queued" and job._future is not None and job._future.cancel():
+            job.status = "cancelled"
+            job.error = "cancelled by user"
+            job.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._persist()
+            return True
+        # Running -> kill the whole process group (nice -> python -> ffmpeg/whisper).
+        if job.status == "running":
+            proc = job._proc
+            if proc is not None and proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            return True
+        return False
+
+    def retry(self, job_id: str) -> Job | None:
+        """Resubmit a finished job's VOD as a new job. Reuses cached download +
+        transcript on disk, so it effectively resumes from the LLM stage."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+        return self.submit(job.vod, no_upload=job.no_upload, title=job.title)
 
     def _run(self, job: Job) -> None:
         """Run the pipeline as a separate, niced subprocess.
@@ -122,6 +159,11 @@ class JobManager:
         the niced job whatever CPU is left after the web server, instead of the
         in-process worker starving the event loop.
         """
+        if job._cancelled:  # cancelled while still queued -> never start
+            job.status = "cancelled"
+            job.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._persist()
+            return
         job.status = "running"
         self._persist()
         cmd = ["nice", "-n", "19", "python", "-u", "-m", "src.main", "run", "--vod", job.vod]
@@ -133,7 +175,9 @@ class JobManager:
                 cmd, cwd="/app", env={**os.environ},
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
+                start_new_session=True,  # own process group so cancel kills the whole tree
             )
+            job._proc = proc
             assert proc.stdout is not None
             for line in proc.stdout:
                 job._buf.write(line)
@@ -142,14 +186,23 @@ class JobManager:
                     last_persist = now
                     self._persist()
             rc = proc.wait()
-            job.status = "done" if rc == 0 else "error"
-            if rc != 0:
-                job.error = f"pipeline exit code {rc}"
+            if job._cancelled:
+                job.status = "cancelled"
+                job.error = "cancelled by user"
+            else:
+                job.status = "done" if rc == 0 else "error"
+                if rc != 0:
+                    job.error = f"pipeline exit code {rc}"
         except Exception as e:  # noqa: BLE001
-            job.status = "error"
-            job.error = str(e)
-            job._buf.write(f"EXCEPTION: {e}\n")
+            if job._cancelled:
+                job.status = "cancelled"
+                job.error = "cancelled by user"
+            else:
+                job.status = "error"
+                job.error = str(e)
+                job._buf.write(f"EXCEPTION: {e}\n")
         finally:
+            job._proc = None
             job.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self._persist()  # final state + full log
 
