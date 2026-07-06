@@ -45,6 +45,7 @@
 </header>
 <main>
   {% if message %}<div style="background:#16223a;border:1px solid #244;color:#bfe;padding:10px 14px;border-radius:8px;margin-bottom:16px">{{ message }}</div>{% endif %}
+  {% if not clips %}<p class="muted" id="empty">No clips rendered yet — open the <a href="{{ base }}/edit/{{ vod }}">✂ Editor</a> to cut clips from the detected highlights.</p>{% endif %}
   <div class="grid" id="grid">
     {% for c in clips %}
     <div class="clip" data-name="{{ c.name }}">
@@ -91,6 +92,7 @@ async function refresh() {
     const grid = document.getElementById('grid');
     const have = new Set([...grid.querySelectorAll('.clip')].map(e => e.dataset.name));
     for (const c of clips) if (!have.has(c.name)) grid.appendChild(card(c));
+    const emp = document.getElementById('empty'); if (emp && clips.length) emp.style.display = 'none';
     document.getElementById('count').textContent = clips.length;
     document.getElementById('progress').style.display = busy ? '' : 'none';
     if (busy) setTimeout(refresh, 3000);

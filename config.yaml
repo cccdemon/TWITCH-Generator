@@ -57,6 +57,9 @@ score:
     video: 0.40
 
 clip:
+  # Auto-render clips in the pipeline. false = only detect highlight moments,
+  # then render each clip by hand in the web editor (choose crop + trim per clip).
+  auto_render: true
   # Output to 9:16 vertical for Shorts/Reels/TikTok. false = keep source aspect.
   vertical: true
   width: 1080

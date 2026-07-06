@@ -71,14 +71,15 @@ def _source_mb(vod_dir: Path) -> float:
 
 
 def _vod_groups() -> list[dict]:
-    """VODs that have rendered clips: [{vod, count, usd, src_mb}], newest first."""
+    """VODs with clips OR detected moments (for the editor), newest first."""
     out: list[dict] = []
     for vod_dir in sorted(data_dir().iterdir(), key=lambda p: p.name, reverse=True):
-        clips_dir = vod_dir / "clips"
-        if not clips_dir.is_dir():
+        if not vod_dir.is_dir():
             continue
-        n = sum(1 for _ in clips_dir.glob("*.mp4"))
-        if n:
+        clips_dir = vod_dir / "clips"
+        n = sum(1 for _ in clips_dir.glob("*.mp4")) if clips_dir.is_dir() else 0
+        has_moments = (vod_dir / "moments.json").exists()
+        if n or has_moments:
             cost = pricing.load_cost(vod_dir / "cost.json")
             out.append({
                 "vod": vod_dir.name,
@@ -442,9 +443,10 @@ def clips_index(request: Request, msg: str | None = None, _: str = Depends(curre
 def clips_vod(request: Request, vod_id: str, msg: str | None = None, _: str = Depends(current_user)) -> HTMLResponse:
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
-    clips = _clips_detail(vod_id)
-    if not clips:
-        raise HTTPException(404, "no clips for this vod")
+    vdir = data_dir() / vod_id
+    if not vdir.is_dir():
+        raise HTTPException(404, "no such vod")
+    clips = _clips_detail(vod_id)  # may be empty (auto_render off → build in editor)
     cost = pricing.load_cost(data_dir() / vod_id / "cost.json")
     return _TEMPLATES.TemplateResponse(
         request, "clips_vod.html",

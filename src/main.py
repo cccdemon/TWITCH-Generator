@@ -155,6 +155,15 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     console.rule("[bold]7/8 FFmpeg — cut clips")
     c = cfg.get("clip", {})
+    if not c.get("auto_render", True):
+        console.print(
+            f"[yellow]auto_render off — {len(moments)} moments saved, "
+            f"render clips manually in the editor (/edit/{info.vod_id})"
+        )
+        elapsed = time.time() - t0
+        timing.record(vod_seconds, elapsed)
+        pricing.record_cost(vod_seconds, meter.usd)
+        return 0
     facecam = c.get("facecam") or {}
     if c.get("vertical", True) and c.get("layout", "split") == "split" and c.get("facecam_auto", True):
         det = vision_stage.detect_facecam(
