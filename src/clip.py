@@ -1,6 +1,7 @@
 """FFmpeg stage: cut each moment into a (optionally vertical, subtitled) clip."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -133,13 +134,17 @@ def render_clip(
         if filters:
             cmd += ["-vf", ",".join(filters)]
 
+    # Encode to a .part file, then atomically rename. The clips page globs
+    # "*.mp4", so a half-written clip is never picked up mid-render.
+    tmp_path = out_dir / f"{name}.mp4.part"
     cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
-        str(out_path),
+        str(tmp_path),
     ]
     subprocess.run(cmd, check=True)
+    os.replace(tmp_path, out_path)
 
     return Clip(moment=moment, path=str(out_path),
                 srt_path=str(srt_path) if has_subs else None)

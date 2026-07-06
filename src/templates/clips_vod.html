@@ -27,12 +27,13 @@
 <header>
   <a href="{{ base }}/clips">← all videos</a>
   <h1>VOD {{ vod }}</h1>
-  <span class="muted">{{ clips|length }} clip(s)</span>
+  <span class="muted"><span id="count">{{ clips|length }}</span> clip(s)</span>
+  <span id="progress" class="badge" style="display:none">⏳ in progress — clips appear as they render</span>
 </header>
 <main>
-  <div class="grid">
+  <div class="grid" id="grid">
     {% for c in clips %}
-    <div class="clip">
+    <div class="clip" data-name="{{ c.name }}">
       <video controls preload="metadata" src="{{ base }}/clips/{{ vod }}/{{ c.name }}"></video>
       <div class="body">
         <span class="title">{{ c.title }}</span>
@@ -50,5 +51,38 @@
     {% endfor %}
   </div>
 </main>
+<script>
+const BASE = "{{ base }}", VOD = "{{ vod }}";
+function fmt(n) { return (n === null || n === undefined) ? "" : n.toFixed(2); }
+function card(c) {
+  const el = document.createElement('div');
+  el.className = 'clip'; el.dataset.name = c.name;
+  const src = `${BASE}/clips/${VOD}/${c.name}`;
+  const cat = c.category ? `<span class="badge">${c.category}</span>` : '';
+  const score = (c.score !== null && c.score !== undefined) ? `<span class="badge">score ${fmt(c.score)}</span>` : '';
+  const scores = (c.audio !== null && c.audio !== undefined)
+    ? `<span class="scores">a=${fmt(c.audio)} · t=${fmt(c.text)} · v=${fmt(c.video)}</span>` : '';
+  el.innerHTML =
+    `<video controls preload="metadata" src="${src}"></video>`+
+    `<div class="body"><span class="title">${c.title}</span>`+
+    `<span>${cat} ${score}</span>${scores}`+
+    `<span class="muted" style="font-size:12px">${c.size_mb} MB</span>`+
+    `<div class="dl"><a href="${src}" download="${c.name}"><button type="button">Download</button></a></div></div>`;
+  return el;
+}
+async function refresh() {
+  try {
+    const r = await fetch(`${BASE}/api/clips/${VOD}`); if (!r.ok) return;
+    const { busy, clips } = await r.json();
+    const grid = document.getElementById('grid');
+    const have = new Set([...grid.querySelectorAll('.clip')].map(e => e.dataset.name));
+    for (const c of clips) if (!have.has(c.name)) grid.appendChild(card(c));
+    document.getElementById('count').textContent = clips.length;
+    document.getElementById('progress').style.display = busy ? '' : 'none';
+    if (busy) setTimeout(refresh, 3000);
+  } catch (e) {}
+}
+refresh();
+</script>
 </body>
 </html>

@@ -16,9 +16,11 @@
 </style>
 </head>
 <body>
-<header><a href="{{ base }}/">← dashboard</a><h1>Clips by video</h1></header>
+<header><a href="{{ base }}/">← dashboard</a><h1>Clips by video</h1>
+  <span id="progress" class="muted" style="display:none">⏳ processing — clips appear here as they render</span>
+</header>
 <main>
-  <section class="card">
+  <section class="card" id="groups">
     {% if groups %}
       {% for g in groups %}
       <div class="row">
@@ -31,5 +33,24 @@
     {% endif %}
   </section>
 </main>
+<script>
+const BASE = "{{ base }}";
+async function refresh() {
+  try {
+    const r = await fetch(`${BASE}/api/clip-groups`); if (!r.ok) return;
+    const { busy, groups } = await r.json();
+    document.getElementById('groups').innerHTML = groups.length
+      ? groups.map(g =>
+          `<div class="row"><span style="flex:1"><a href="${BASE}/clips/${g.vod}">VOD ${g.vod}</a> `+
+          `<small class="muted">· ${g.count} clip(s)</small></span>`+
+          `<a href="${BASE}/clips/${g.vod}"><button type="button">View</button></a></div>`
+        ).join('')
+      : '<p class="muted">No clips yet. Process a VOD on the dashboard.</p>';
+    document.getElementById('progress').style.display = busy ? '' : 'none';
+    if (busy) setTimeout(refresh, 4000);
+  } catch (e) {}
+}
+refresh();
+</script>
 </body>
 </html>

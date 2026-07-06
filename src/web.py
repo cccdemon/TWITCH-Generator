@@ -266,6 +266,20 @@ def job_detail(request: Request, job_id: str, _: str = Depends(current_user)) ->
     )
 
 
+@app.get("/api/clips/{vod_id}")
+def api_clips(vod_id: str, _: str = Depends(current_user)) -> JSONResponse:
+    """Live clip list for one VOD — used to append clips as they finish rendering."""
+    busy = any(j.status in ("running", "queued") for j in manager.list())
+    return JSONResponse({"busy": busy, "clips": _clips_detail(vod_id)})
+
+
+@app.get("/api/clip-groups")
+def api_clip_groups(_: str = Depends(current_user)) -> JSONResponse:
+    """Live VOD list for the clips index."""
+    busy = any(j.status in ("running", "queued") for j in manager.list())
+    return JSONResponse({"busy": busy, "groups": _vod_groups()})
+
+
 @app.get("/api/jobs/{job_id}/log")
 def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
     job = manager.get(job_id)
