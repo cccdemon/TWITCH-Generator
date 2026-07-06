@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from rich.console import Console
@@ -10,12 +11,25 @@ from rich.console import Console
 from . import analyze as analyze_stage
 from . import audio as audio_stage
 from . import clip as clip_stage
+from . import pricing
 from . import score as score_stage
+from . import timing
 from . import transcribe as transcribe_stage
 from . import twitch as twitch_stage
 from . import upload as upload_stage
 from . import vision as vision_stage
 from .config import data_dir, load_config
+
+
+def _fmt_dur(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 console = Console()
 
@@ -27,6 +41,9 @@ def _vod_workdir(vod_id: str) -> Path:
 
 
 def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console = console) -> int:
+    t0 = time.time()
+    meter = pricing.CostMeter()
+
     console.rule("[bold]1/8 Twitch — resolve VOD")
     info = twitch_stage.fetch_vod_info(vod_url)
     work = _vod_workdir(info.vod_id)
@@ -38,6 +55,16 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         info, work, fmt=dl.get("format", "best"), reuse=dl.get("reuse_existing", True)
     )
     console.print(f"media: {media}")
+
+    # Predict total processing time from VOD length (learned factor).
+    vod_seconds = info.duration or timing.probe_duration(media)
+    eta = timing.estimate_seconds(vod_seconds)
+    if eta:
+        timing.write_run(work, started=t0, vod_seconds=vod_seconds, eta_seconds=eta)
+        console.print(
+            f"[cyan]estimated processing time ~{_fmt_dur(eta)}[/] "
+            f"(VOD {_fmt_dur(vod_seconds)}, factor {timing.factor():.2f})"
+        )
 
     console.rule("[bold]2/8 Whisper — transcribe")
     w = cfg.get("whisper", {})
@@ -68,6 +95,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         max_clips=a.get("max_clips", 10),
         min_clip_seconds=a.get("min_clip_seconds", 15),
         max_clip_seconds=a.get("max_clip_seconds", 60),
+        meter=meter,
     ) if segments else []
     console.print(f"{len(text_moments)} text moments")
 
@@ -75,7 +103,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     vision_frames = []
     vcfg = cfg.get("vision", {})
     if vcfg.get("enabled", True):
-        vision_frames = vision_stage.run(media, work, cfg)
+        vision_frames = vision_stage.run(media, work, cfg, meter=meter)
         thr = vcfg.get("highlight_threshold", 0.5)
         hot = sum(1 for f in vision_frames if f.visual_score >= thr)
         console.print(f"{len(vision_frames)} frames scored, {hot} above threshold")
@@ -89,6 +117,13 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         console.print(f"{len(audio_energy)} audio buckets")
     else:
         console.print("disabled")
+
+    # All Claude API calls are done by now — persist the cost.
+    meter.save(work / "cost.json")
+    console.print(
+        f"[cyan]Claude cost ~${meter.usd:.4f}[/] "
+        f"({meter.calls} calls, {meter.input_tokens + meter.cache_read_tokens + meter.cache_write_tokens} in / {meter.output_tokens} out tokens)"
+    )
 
     console.rule("[bold]6/8 Fuse — highlight score")
     if vision_frames or audio_energy:
@@ -126,7 +161,12 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     if no_upload:
         console.rule("[bold]8/8 upload — SKIPPED")
-        console.print(f"[green]done — {len(clips)} clips in {work / 'clips'}")
+        elapsed = time.time() - t0
+        timing.record(vod_seconds, elapsed)
+        console.print(
+            f"[green]done — {len(clips)} clips in {work / 'clips'} "
+            f"(took {_fmt_dur(elapsed)})"
+        )
         return 0
 
     console.rule("[bold]8/8 Upload")
@@ -138,7 +178,9 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             tag = "[green]OK" if res.ok else "[red]FAIL"
             console.print(f"  {tag} {res.platform}: {res.url or res.error}")
 
-    console.print(f"[green]done — {len(clips)} clips")
+    elapsed = time.time() - t0
+    timing.record(vod_seconds, elapsed)
+    console.print(f"[green]done — {len(clips)} clips (took {_fmt_dur(elapsed)})")
     return 0
 
 

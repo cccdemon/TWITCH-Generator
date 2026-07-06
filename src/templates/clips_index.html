@@ -11,8 +11,11 @@
   header h1 { font-size:18px; margin:0; } a { color:var(--acc); }
   main { max-width:980px; margin:0 auto; padding:24px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
-  .row { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .row { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
   .muted { color:var(--mut); } button { background:transparent; border:1px solid var(--line); color:var(--fg); padding:8px 14px; border-radius:8px; cursor:pointer; }
+  button.danger { border-color:#633; color:#fbc; }
+  .msg { background:#16223a; border:1px solid #244; color:#bfe; padding:10px 14px; border-radius:8px; margin-bottom:16px; }
+  form { margin:0; display:inline; }
 </style>
 </head>
 <body>
@@ -20,12 +23,20 @@
   <span id="progress" class="muted" style="display:none">⏳ processing — clips appear here as they render</span>
 </header>
 <main>
+  {% if message %}<div class="msg">{{ message }}</div>{% endif %}
   <section class="card" id="groups">
     {% if groups %}
       {% for g in groups %}
       <div class="row">
-        <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">VOD {{ g.vod }}</a> <small class="muted">· {{ g.count }} clip(s)</small></span>
+        <span style="flex:1"><a href="{{ base }}/clips/{{ g.vod }}">VOD {{ g.vod }}</a>
+          <small class="muted">· {{ g.count }} clip(s){% if g.usd is not none %} · ${{ "%.2f"|format(g.usd) }} Claude{% endif %}{% if g.src_mb %} · source {{ g.src_mb }} MB{% endif %}</small></span>
         <a href="{{ base }}/clips/{{ g.vod }}"><button type="button">View</button></a>
+        {% if g.src_mb %}
+        <form method="post" action="{{ base }}/vods/{{ g.vod }}/free" onsubmit="return confirm('Delete the {{ g.src_mb }} MB source video + intermediates? Clips are kept.')">
+          <button type="submit">Free {{ g.src_mb }} MB</button></form>
+        {% endif %}
+        <form method="post" action="{{ base }}/vods/{{ g.vod }}/delete" onsubmit="return confirm('Delete EVERYTHING for VOD {{ g.vod }}, including rendered clips? This cannot be undone.')">
+          <button type="submit" class="danger">Delete all</button></form>
       </div>
       {% endfor %}
     {% else %}
@@ -35,16 +46,24 @@
 </main>
 <script>
 const BASE = "{{ base }}";
+function groupRow(g) {
+  const meta = `· ${g.count} clip(s)` +
+    (g.usd != null ? ` · $${g.usd.toFixed(2)} Claude` : '') +
+    (g.src_mb ? ` · source ${g.src_mb} MB` : '');
+  const free = g.src_mb
+    ? `<form method="post" action="${BASE}/vods/${g.vod}/free" onsubmit="return confirm('Delete the ${g.src_mb} MB source video + intermediates? Clips are kept.')"><button type="submit">Free ${g.src_mb} MB</button></form>`
+    : '';
+  return `<div class="row"><span style="flex:1"><a href="${BASE}/clips/${g.vod}">VOD ${g.vod}</a> `+
+    `<small class="muted">${meta}</small></span>`+
+    `<a href="${BASE}/clips/${g.vod}"><button type="button">View</button></a>${free}`+
+    `<form method="post" action="${BASE}/vods/${g.vod}/delete" onsubmit="return confirm('Delete EVERYTHING for VOD ${g.vod}, including rendered clips? This cannot be undone.')"><button type="submit" class="danger">Delete all</button></form></div>`;
+}
 async function refresh() {
   try {
     const r = await fetch(`${BASE}/api/clip-groups`); if (!r.ok) return;
     const { busy, groups } = await r.json();
     document.getElementById('groups').innerHTML = groups.length
-      ? groups.map(g =>
-          `<div class="row"><span style="flex:1"><a href="${BASE}/clips/${g.vod}">VOD ${g.vod}</a> `+
-          `<small class="muted">· ${g.count} clip(s)</small></span>`+
-          `<a href="${BASE}/clips/${g.vod}"><button type="button">View</button></a></div>`
-        ).join('')
+      ? groups.map(groupRow).join('')
       : '<p class="muted">No clips yet. Process a VOD on the dashboard.</p>';
     document.getElementById('progress').style.display = busy ? '' : 'none';
     if (busy) setTimeout(refresh, 4000);

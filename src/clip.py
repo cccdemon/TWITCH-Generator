@@ -141,6 +141,7 @@ def render_clip(
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
+        "-f", "mp4",
         str(tmp_path),
     ]
     subprocess.run(cmd, check=True)

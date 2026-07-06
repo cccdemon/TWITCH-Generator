@@ -79,6 +79,7 @@ def score_frames(
     model: str,
     categories: list[str],
     max_frames_per_call: int,
+    meter=None,
 ) -> list[VisionFrame]:
     if not frames:
         return []
@@ -110,6 +111,8 @@ def score_frames(
             tool_choice={"type": "tool", "name": "report_frame_scores"},
             messages=[{"role": "user", "content": content}],
         )
+        if meter is not None:
+            meter.add(model, msg.usage)
         out.extend(_parse(msg, ts_by_index, categories))
 
     out.sort(key=lambda f: f.t)
@@ -136,7 +139,7 @@ def _parse(msg: Any, ts_by_index: dict[int, float], categories: list[str]) -> li
     return res
 
 
-def run(source: Path, work: Path, cfg: dict) -> list[VisionFrame]:
+def run(source: Path, work: Path, cfg: dict, meter=None) -> list[VisionFrame]:
     v = cfg.get("vision", {})
     cache = work / "vision.json"
     if cache.exists():
@@ -153,6 +156,7 @@ def run(source: Path, work: Path, cfg: dict) -> list[VisionFrame]:
         model=v.get("model", "claude-sonnet-4-6"),
         categories=v.get("categories", ["action", "pvp", "explosion", "ship_damage", "landing", "bug"]),
         max_frames_per_call=v.get("max_frames_per_call", 12),
+        meter=meter,
     )
     cache.write_text(
         json.dumps([f.__dict__ for f in result], ensure_ascii=False),

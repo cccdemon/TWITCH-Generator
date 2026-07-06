@@ -73,6 +73,7 @@ def analyze(
     max_clips: int,
     min_clip_seconds: float,
     max_clip_seconds: float,
+    meter=None,
 ) -> list[Moment]:
     client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
 
@@ -101,6 +102,8 @@ def analyze(
                 ),
             }],
         )
+        if meter is not None:
+            meter.add(model, msg.usage)
         found.extend(_parse(msg, categories, min_clip_seconds, max_clip_seconds))
 
     found.sort(key=lambda m: m.score, reverse=True)

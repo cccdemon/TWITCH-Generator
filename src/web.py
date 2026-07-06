@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets as _secrets
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,9 +22,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import oauth
+from . import pricing
+from . import timing
 from . import twitch as twitch_stage
 from .config import data_dir, root_path
 from .jobs import manager
+
+# What to keep when "freeing" a VOD (delete the heavy source, keep the output).
+_FREE_KEEP = {"clips", "moments.json", "cost.json"}
 from .settings_store import (
     SETTING_KEYS,
     apply_settings,
@@ -37,8 +43,16 @@ BASE = root_path()  # external prefix, e.g. "/vod"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+def _source_mb(vod_dir: Path) -> float:
+    """Size of the raw VOD download (the disk hog), in MB. 0 if already freed."""
+    src = vod_dir / f"{vod_dir.name}.mp4"
+    if src.exists():
+        return round(src.stat().st_size / 1e6, 1)
+    return 0.0
+
+
 def _vod_groups() -> list[dict]:
-    """VODs that have rendered clips: [{vod, count}], newest first."""
+    """VODs that have rendered clips: [{vod, count, usd, src_mb}], newest first."""
     out: list[dict] = []
     for vod_dir in sorted(data_dir().iterdir(), key=lambda p: p.name, reverse=True):
         clips_dir = vod_dir / "clips"
@@ -46,8 +60,69 @@ def _vod_groups() -> list[dict]:
             continue
         n = sum(1 for _ in clips_dir.glob("*.mp4"))
         if n:
-            out.append({"vod": vod_dir.name, "count": n})
+            cost = pricing.load_cost(vod_dir / "cost.json")
+            out.append({
+                "vod": vod_dir.name,
+                "count": n,
+                "usd": cost["usd"] if cost else None,
+                "src_mb": _source_mb(vod_dir),
+            })
     return out
+
+
+def _job_vod_id(vod: str) -> str | None:
+    try:
+        return twitch_stage.parse_vod_id(vod)
+    except ValueError:
+        return None
+
+
+def _job_etas() -> dict[str, float]:
+    """job_id -> seconds remaining, for running jobs that have a run.json."""
+    out: dict[str, float] = {}
+    for j in manager.list():
+        if j.status != "running":
+            continue
+        vid = _job_vod_id(j.vod)
+        if not vid:
+            continue
+        left = timing.remaining_seconds(vid)
+        if left is not None:
+            out[j.id] = round(left)
+    return out
+
+
+def _busy_vod_ids() -> set[str]:
+    """VOD ids that have a running/queued job — must not be deleted."""
+    ids: set[str] = set()
+    for j in manager.list():
+        if j.status in ("running", "queued"):
+            vid = _job_vod_id(j.vod)
+            if vid:
+                ids.add(vid)
+    return ids
+
+
+def _delete_vod(vod_id: str, *, keep_clips: bool) -> None:
+    """Free the source (keep_clips) or wipe the whole VOD dir. Irreversible."""
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    root = data_dir().resolve()
+    vdir = (root / vod_id).resolve()
+    if not str(vdir).startswith(str(root) + os.sep) or not vdir.is_dir():
+        raise HTTPException(404, "no such vod")
+    if vod_id in _busy_vod_ids():
+        raise HTTPException(409, "VOD is being processed — cancel the job first")
+    if keep_clips:
+        for child in vdir.iterdir():
+            if child.name in _FREE_KEEP:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(vdir, ignore_errors=True)
 
 
 def _moments_map(vod_id: str) -> dict[int, dict]:
@@ -177,6 +252,7 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "oauth": oauth.all_status(),
             "public_url": oauth.public_url(),
             "clip_groups": _vod_groups(),
+            "job_etas": _job_etas(),
         },
     )
 
@@ -249,9 +325,11 @@ def retry_job(job_id: str, _: str = Depends(current_user)) -> RedirectResponse:
 
 @app.get("/api/jobs")
 def api_jobs(_: str = Depends(current_user)) -> JSONResponse:
+    etas = _job_etas()
     return JSONResponse([
         {"id": j.id, "vod": j.vod, "title": j.title, "status": j.status,
-         "created": j.created, "finished": j.finished, "error": j.error}
+         "created": j.created, "finished": j.finished, "error": j.error,
+         "eta": etas.get(j.id)}
         for j in manager.list()
     ])
 
@@ -290,9 +368,9 @@ def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
 
 # --------------------------------------------------------------- clips ---
 @app.get("/clips", response_class=HTMLResponse)
-def clips_index(request: Request, _: str = Depends(current_user)) -> HTMLResponse:
+def clips_index(request: Request, msg: str | None = None, _: str = Depends(current_user)) -> HTMLResponse:
     return _TEMPLATES.TemplateResponse(
-        request, "clips_index.html", {"base": BASE, "groups": _vod_groups()}
+        request, "clips_index.html", {"base": BASE, "groups": _vod_groups(), "message": msg}
     )
 
 
@@ -303,9 +381,29 @@ def clips_vod(request: Request, vod_id: str, _: str = Depends(current_user)) -> 
     clips = _clips_detail(vod_id)
     if not clips:
         raise HTTPException(404, "no clips for this vod")
+    cost = pricing.load_cost(data_dir() / vod_id / "cost.json")
     return _TEMPLATES.TemplateResponse(
-        request, "clips_vod.html", {"base": BASE, "vod": vod_id, "clips": clips}
+        request, "clips_vod.html",
+        {
+            "base": BASE, "vod": vod_id, "clips": clips,
+            "usd": cost["usd"] if cost else None,
+            "src_mb": _source_mb(data_dir() / vod_id),
+        },
     )
+
+
+@app.post("/vods/{vod_id}/free")
+def free_vod(vod_id: str, _: str = Depends(current_user)) -> RedirectResponse:
+    """Delete the raw source download + intermediates, keep the rendered clips."""
+    _delete_vod(vod_id, keep_clips=True)
+    return RedirectResponse(f"{BASE}/clips?msg=" + quote(f"VOD {vod_id}: source freed"), status_code=303)
+
+
+@app.post("/vods/{vod_id}/delete")
+def delete_vod(vod_id: str, _: str = Depends(current_user)) -> RedirectResponse:
+    """Wipe the whole VOD directory, including rendered clips. Irreversible."""
+    _delete_vod(vod_id, keep_clips=False)
+    return RedirectResponse(f"{BASE}/clips?msg=" + quote(f"VOD {vod_id}: deleted"), status_code=303)
 
 
 @app.get("/clips/{vod_id}/{filename}")

@@ -15,7 +15,7 @@ from .config import data_dir
 # Editable keys exposed in the web UI. (key, label, secret?)
 SETTING_KEYS: list[tuple[str, str, bool]] = [
     ("ANTHROPIC_API_KEY", "Anthropic API Key", True),
-    ("TWITCH_CLIENT_ID", "Twitch Client ID", False),
+    ("TWITCH_CLIENT_ID", "Twitch Client ID", True),
     ("TWITCH_CLIENT_SECRET", "Twitch Client Secret", True),
     # Public base URL of this app (OAuth redirect target), e.g.
     # https://suite.raumdock.org/vod

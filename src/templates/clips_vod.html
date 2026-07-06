@@ -21,14 +21,24 @@
   .dl { margin-top:4px; }
   .dl a { display:inline-block; }
   button { background:var(--acc); color:#fff; border:0; padding:8px 14px; border-radius:8px; font-weight:600; cursor:pointer; width:100%; }
+  header form { margin:0; }
+  header button { width:auto; background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:400; }
+  header button.danger { border-color:#633; color:#fbc; }
 </style>
 </head>
 <body>
 <header>
   <a href="{{ base }}/clips">← all videos</a>
   <h1>VOD {{ vod }}</h1>
-  <span class="muted"><span id="count">{{ clips|length }}</span> clip(s)</span>
+  <span class="muted"><span id="count">{{ clips|length }}</span> clip(s){% if usd is not none %} · ${{ "%.2f"|format(usd) }} Claude{% endif %}{% if src_mb %} · source {{ src_mb }} MB{% endif %}</span>
   <span id="progress" class="badge" style="display:none">⏳ in progress — clips appear as they render</span>
+  <span style="flex:1"></span>
+  {% if src_mb %}
+  <form method="post" action="{{ base }}/vods/{{ vod }}/free" onsubmit="return confirm('Delete the {{ src_mb }} MB source video + intermediates? Clips are kept.')">
+    <button type="submit">Free {{ src_mb }} MB</button></form>
+  {% endif %}
+  <form method="post" action="{{ base }}/vods/{{ vod }}/delete" onsubmit="return confirm('Delete EVERYTHING for VOD {{ vod }}, including these clips? This cannot be undone.')">
+    <button type="submit" class="danger">Delete all</button></form>
 </header>
 <main>
   <div class="grid" id="grid">
