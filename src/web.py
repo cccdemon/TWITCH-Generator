@@ -13,6 +13,7 @@ import re
 import secrets as _secrets
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -501,20 +502,79 @@ def _file_iter(path: Path, start: int, end: int, chunk: int = 1 << 20):
             yield data
 
 
+# --- editor preview proxy -----------------------------------------------------
+# The raw VOD is multi-GB and usually not faststart, so browsers can't scrub it.
+# We build a small 480p faststart proxy once and serve THAT to the editor. The
+# proxy shares the original's timeline, so trim times/box fractions map 1:1 back
+# to the full-res source at render time.
+_proxy_state: dict[str, str] = {}   # vod_id -> "building" | "error"
+_proxy_lock = threading.Lock()
+
+
+def _proxy_path(vod_id: str) -> Path:
+    return data_dir() / vod_id / "edit_proxy.mp4"
+
+
+def _build_proxy(vod_id: str) -> None:
+    src = data_dir() / vod_id / f"{vod_id}.mp4"
+    out = _proxy_path(vod_id)
+    tmp = out.with_suffix(".mp4.part")
+    try:
+        subprocess.run(
+            ["nice", "-n", "19", "ffmpeg", "-y", "-nostdin", "-i", str(src),
+             "-vf", "scale=-2:480", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "28", "-c:a", "aac", "-b:a", "96k",
+             "-movflags", "+faststart", str(tmp)],
+            check=True, capture_output=True,
+        )
+        os.replace(tmp, out)
+        state = "ready"
+    except Exception:  # noqa: BLE001
+        state = "error"
+        tmp.unlink(missing_ok=True)
+    with _proxy_lock:
+        _proxy_state[vod_id] = state
+
+
+@app.get("/proxy/{vod_id}/status")
+def proxy_status(vod_id: str, _: str = Depends(current_user)) -> JSONResponse:
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    if _proxy_path(vod_id).exists():
+        return JSONResponse({"state": "ready"})
+    with _proxy_lock:
+        return JSONResponse({"state": _proxy_state.get(vod_id, "none")})
+
+
+@app.post("/proxy/{vod_id}")
+def proxy_build(vod_id: str, _: str = Depends(current_user)) -> JSONResponse:
+    if not _SAFE_NAME.match(vod_id):
+        raise HTTPException(404, "no such vod")
+    if _proxy_path(vod_id).exists():
+        return JSONResponse({"state": "ready"})
+    if not (data_dir() / vod_id / f"{vod_id}.mp4").exists():
+        raise HTTPException(404, "source video not available")
+    with _proxy_lock:
+        if _proxy_state.get(vod_id) == "building":
+            return JSONResponse({"state": "building"})
+        _proxy_state[vod_id] = "building"
+    threading.Thread(target=_build_proxy, args=(vod_id,), daemon=True).start()
+    return JSONResponse({"state": "building"})
+
+
 @app.get("/source/{vod_id}")
 def source_video(vod_id: str, request: Request, _: str = Depends(current_user)):
-    """Serve the raw VOD with HTTP Range (206) so the editor can scrub/seek it.
+    """Serve the 480p faststart editor proxy with HTTP Range (206).
 
-    Starlette's FileResponse doesn't reliably honour Range, and large VODs are
-    usually not faststart — without 206 the browser can't start playback until
-    the whole file arrives. So we handle Range ourselves.
+    Starlette's FileResponse doesn't reliably honour Range; we handle it here so
+    the browser can seek. Build the proxy first via POST /proxy/{vod_id}.
     """
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
-    src = (data_dir() / vod_id / f"{vod_id}.mp4").resolve()
+    src = _proxy_path(vod_id).resolve()
     root = (data_dir() / vod_id).resolve()
     if not str(src).startswith(str(root) + os.sep) or not src.is_file():
-        raise HTTPException(404, "source video not available (deleted?)")
+        raise HTTPException(404, "preview not ready — build it first")
 
     size = src.stat().st_size
     range_header = request.headers.get("range")
@@ -570,6 +630,7 @@ def editor(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTM
             "moments": _moments_list(vod_id),
             "facecam": _load_facecam(vod_id),
             "has_source": src.exists(),
+            "proxy_ready": _proxy_path(vod_id).exists(),
             "width": c.get("width", 1080), "height": c.get("height", 1920),
         },
     )

@@ -19,9 +19,11 @@
   button { background:var(--acc); color:#fff; border:0; padding:9px 13px; border-radius:8px; font-weight:600; cursor:pointer; }
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:500; }
   button.sm { padding:6px 10px; font-size:13px; }
-  .stagewrap { position:relative; display:inline-block; max-width:100%; line-height:0; }
+  .stagewrap { position:relative; display:block; width:100%; min-height:280px; line-height:0; background:#000; border-radius:8px; overflow:hidden; }
   video { width:100%; max-height:70vh; background:#000; display:block; }
   #overlay { position:absolute; inset:0; pointer-events:none; }
+  #prev { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; padding:20px; background:rgba(0,0,0,.72); color:var(--fg); font-size:14px; }
+  #prev.hidden { display:none; }
   .box { position:absolute; box-sizing:border-box; cursor:move; pointer-events:auto; }
   .box.cam { border:2px solid var(--cam); background:rgba(62,207,142,.14); }
   .box.game { border:2px solid var(--game); background:rgba(74,163,255,.10); }
@@ -50,11 +52,12 @@
   <section class="card">
     {% if has_source %}
     <div class="stagewrap" id="stage">
-      <video id="vid" src="{{ base }}/source/{{ vod }}" preload="metadata"></video>
+      <video id="vid" preload="metadata"></video>
       <div id="overlay">
         <div class="box game" id="boxGame"><span class="tag">game</span><div class="h"></div></div>
         <div class="box cam" id="boxCam"><span class="tag">cam</span><div class="h"></div></div>
       </div>
+      <div id="prev"></div>
     </div>
     <div class="row" style="margin-top:10px">
       <button type="button" class="ghost sm" id="play">▶</button>
@@ -234,8 +237,31 @@ vid.addEventListener('timeupdate', ()=>{
 
 // init
 function boot(){ seek.max = vid.duration || 100; drawAll(); updateLen(); tcur.textContent = '0:00 / ' + fmtT(vid.duration||0); }
-if (vid.readyState >= 1) boot(); else vid.addEventListener('loadedmetadata', boot);
+vid.addEventListener('loadedmetadata', boot);
 window.addEventListener('resize', drawAll);
+
+// --- preview proxy (small 480p faststart clip for scrubbing) ---
+const prev = document.getElementById('prev');
+const PROXY_READY = {{ 'true' if proxy_ready else 'false' }};
+const HAS_SOURCE = {{ 'true' if has_source else 'false' }};
+function loadVideo(){ prev.classList.add('hidden'); vid.src = `${BASE}/source/${VOD}?t=${Date.now()}`; vid.load(); }
+function prevMsg(html){ prev.classList.remove('hidden'); prev.innerHTML = html; }
+let pollTimer = null;
+async function pollProxy(){
+  try {
+    const r = await fetch(`${BASE}/proxy/${VOD}/status`); const d = await r.json();
+    if(d.state === 'ready'){ clearInterval(pollTimer); loadVideo(); }
+    else if(d.state === 'error'){ clearInterval(pollTimer); prevMsg('Preview build failed. <button id="retry">Retry</button>'); document.getElementById('retry').onclick = startBuild; }
+  } catch(e) {}
+}
+async function startBuild(){
+  prevMsg('Building preview… (one-time, ~1–2 min for a long VOD)');
+  try { await fetch(`${BASE}/proxy/${VOD}`, {method:'POST'}); } catch(e) {}
+  clearInterval(pollTimer); pollTimer = setInterval(pollProxy, 3000);
+}
+if(PROXY_READY){ loadVideo(); }
+else if(HAS_SOURCE){ prevMsg('Editor preview needs a small proxy of this VOD.<br><button id="mk">Prepare preview</button>'); document.getElementById('mk').onclick = startBuild; }
+else { prevMsg('Source video was deleted (“Free”). Re-process the VOD to edit.'); }
 </script>
 {% endif %}
 </body>
