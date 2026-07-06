@@ -76,7 +76,7 @@ clip:
   # Pad seconds added before/after the LLM-marked window.
   pad_start: 1.0
   pad_end: 1.0
-  burn_subtitles: true
+  burn_subtitles: false
 
 upload:
   # Download-first: clips are offered in the web UI; you upload them yourself.
