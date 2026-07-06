@@ -522,14 +522,24 @@ def source_video(vod_id: str, request: Request, _: str = Depends(current_user)):
         return FileResponse(src, media_type="video/mp4",
                             headers={"Accept-Ranges": "bytes"})
 
-    # "bytes=START-END" (either side may be blank)
+    # "bytes=START-END", "bytes=START-", or suffix "bytes=-N" (last N bytes —
+    # browsers use this to fetch the moov atom of a non-faststart mp4).
     try:
         unit, _, rng = range_header.partition("=")
         if unit.strip() != "bytes":
             raise ValueError
         start_s, _, end_s = rng.partition("-")
-        start = int(start_s) if start_s else 0
-        end = int(end_s) if end_s else size - 1
+        if start_s == "":
+            if end_s == "":
+                raise ValueError
+            length = int(end_s)              # suffix range: final `length` bytes
+            if length <= 0:
+                raise ValueError
+            start = max(0, size - length)
+            end = size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
     except ValueError:
         raise HTTPException(416, "invalid range")
     end = min(end, size - 1)
