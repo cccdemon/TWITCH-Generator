@@ -112,7 +112,7 @@ def build_auth_url(platform: str, state: str) -> str:
     if platform == "tiktok":
         params = {
             "client_key": cid, "redirect_uri": ru, "response_type": "code",
-            "scope": "user.info.basic,video.publish", "state": state,
+            "scope": "user.info.basic,video.upload,video.publish", "state": state,
         }
         return "https://www.tiktok.com/v2/auth/authorize/?" + urlencode(params)
     if platform == "instagram":
@@ -152,7 +152,7 @@ def exchange_code(platform: str, code: str) -> None:
             "refresh_token": t.get("refresh_token"),
             "expires_at": time.time() + int(t.get("expires_in", 86400)),
             "open_id": t.get("open_id"),
-            "account": t.get("open_id", "TikTok"),
+            "account": _tiktok_name(t["access_token"]) or t.get("open_id", "TikTok"),
         })
     elif platform == "instagram":
         short = httpx.get(GRAPH + "/oauth/access_token", params={
@@ -171,6 +171,17 @@ def exchange_code(platform: str, code: str) -> None:
         })
     else:
         raise ValueError(f"unknown platform: {platform}")
+
+
+def _tiktok_name(token: str) -> str:
+    try:
+        r = httpx.get("https://open.tiktokapis.com/v2/user/info/",
+                      params={"fields": "display_name,username"},
+                      headers={"Authorization": f"Bearer {token}"}, timeout=15).json()
+        u = (r.get("data") or {}).get("user") or {}
+        return u.get("username") or u.get("display_name") or ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # -------------------------------------------------------- refresh ----

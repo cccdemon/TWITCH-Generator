@@ -7,12 +7,14 @@ lag, and normalise against a rolling baseline so a sleepy 20-viewer chat and a
 5k-viewer chat both yield 0..1.
 
 Raw messages are cached in data/<vod>/chat_messages.json so re-runs and the
-web UI can reuse them without hitting Twitch again.
+web UI can reuse them without hitting Twitch again. Fetched via Twitch's public
+GQL replay endpoint (same query the web player uses); no API keys needed.
 """
 from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from .signals import Signal, bucketize, relative
@@ -51,19 +53,65 @@ def message_weight(text: str) -> float:
     return w
 
 
-def _download(vod_id: str) -> list[tuple[float, str]]:
-    """Pull the chat replay via chat-downloader (public GQL, no auth needed)."""
-    from chat_downloader import ChatDownloader  # imported lazily: optional dep
+_GQL = "https://gql.twitch.tv/gql"
+_GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"   # Twitch's own web client id (public)
+_GQL_COMMENTS_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
 
-    url = f"https://www.twitch.tv/videos/{vod_id}"
+
+def _download(vod_id: str, *, log=print) -> list[tuple[float, str]]:
+    """Pull the chat replay straight from Twitch's public GQL endpoint.
+
+    Same persisted query the Twitch web player uses (VideoCommentsByOffsetOrCursor),
+    cursor-paged, ~60 messages per page. No auth, no third-party scraper: the
+    chat-downloader package stopped working against this endpoint in 2026.
+    """
+    import httpx
+
     out: list[tuple[float, str]] = []
-    chat = ChatDownloader().get_chat(url, message_groups=["messages"])
-    for m in chat:
-        t = m.get("time_in_seconds")
-        text = m.get("message") or ""
-        if t is None:
-            continue
-        out.append((round(float(t), 2), str(text)[:200]))
+    cursor: str | None = None
+    pages = 0
+    headers = {"Client-ID": _GQL_CLIENT_ID, "Content-Type": "application/json"}
+    with httpx.Client(timeout=30, headers=headers) as client:
+        while True:
+            variables: dict = {"videoID": vod_id}
+            if cursor:
+                variables["cursor"] = cursor
+            else:
+                variables["contentOffsetSeconds"] = 0
+            body = [{
+                "operationName": "VideoCommentsByOffsetOrCursor",
+                "variables": variables,
+                "extensions": {"persistedQuery": {"version": 1, "sha256Hash": _GQL_COMMENTS_HASH}},
+            }]
+            data: dict = {}
+            for attempt in range(4):
+                try:
+                    r = client.post(_GQL, json=body)
+                    r.raise_for_status()
+                    data = r.json()[0]
+                    if "data" not in data:
+                        raise RuntimeError(f"gql: {str(data)[:200]}")
+                    break
+                except Exception:  # noqa: BLE001
+                    if attempt == 3:
+                        raise
+                    time.sleep(1.5 * (attempt + 1))
+            video = data["data"].get("video") or {}
+            comments = video.get("comments") or {}
+            edges = comments.get("edges") or []
+            for e in edges:
+                node = e.get("node") or {}
+                t = node.get("contentOffsetSeconds")
+                frags = (node.get("message") or {}).get("fragments") or []
+                text = "".join(f.get("text") or "" for f in frags)
+                if t is not None:
+                    out.append((float(t), text[:200]))
+            pages += 1
+            cursor = edges[-1].get("cursor") if edges else None
+            if not cursor or not (comments.get("pageInfo") or {}).get("hasNextPage"):
+                break
+            if pages % 100 == 0:
+                log(f"  chat: {len(out)} messages so far…")
     return out
 
 
@@ -76,7 +124,7 @@ def load_messages(work: Path, vod_id: str, *, log=print) -> list[tuple[float, st
         except (json.JSONDecodeError, OSError, ValueError, TypeError):
             pass
     try:
-        msgs = _download(vod_id)
+        msgs = _download(vod_id, log=log)
     except Exception as e:  # noqa: BLE001 — chat is optional; never kill the pipeline
         log(f"[yellow]chat replay unavailable ({type(e).__name__}: {e}) — skipping chat signal")
         return []

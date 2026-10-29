@@ -20,6 +20,10 @@
   .muted { color:var(--mut); }
   .dl { margin-top:4px; }
   .dl a { display:inline-block; }
+  .dl { display:flex; gap:8px; }
+  .dl form { margin:0; flex:1; }
+  .dl a { flex:1; }
+  .dl button.tt { background:#111; border:1px solid var(--line); }
   button { background:var(--acc); color:#fff; border:0; padding:8px 14px; border-radius:8px; font-weight:600; cursor:pointer; width:100%; }
   header form { margin:0; }
   header button { width:auto; background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:400; }
@@ -60,14 +64,15 @@
         <span class="scores">a={{ "%.2f"|format(c.audio) }} · t={{ "%.2f"|format(c.text) }} · v={{ "%.2f"|format(c.video) }}</span>
         {% endif %}
         <span class="muted" style="font-size:12px">{{ c.size_mb }} MB</span>
-        <div class="dl"><a href="{{ base }}/clips/{{ vod }}/{{ c.name }}" download="{{ c.name }}"><button type="button">Download</button></a></div>
+        <div class="dl"><a href="{{ base }}/clips/{{ vod }}/{{ c.name }}" download="{{ c.name }}"><button type="button">Download</button></a>
+          {% if tiktok and tiktok.connected %}<form method="post" action="{{ base }}/clips/{{ vod }}/{{ c.name }}/tiktok" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='uploading…'"><button type="submit" class="tt">▶ TikTok</button></form>{% endif %}</div>
       </div>
     </div>
     {% endfor %}
   </div>
 </main>
 <script>
-const BASE = "{{ base }}", VOD = "{{ vod }}";
+const BASE = "{{ base }}", VOD = "{{ vod }}", TIKTOK = {{ 'true' if tiktok and tiktok.connected else 'false' }};
 function fmt(n) { return (n === null || n === undefined) ? "" : n.toFixed(2); }
 function card(c) {
   const el = document.createElement('div');
@@ -82,7 +87,9 @@ function card(c) {
     `<div class="body"><span class="title">${c.title}</span>`+
     `<span>${cat} ${score}</span>${scores}`+
     `<span class="muted" style="font-size:12px">${c.size_mb} MB</span>`+
-    `<div class="dl"><a href="${src}" download="${c.name}"><button type="button">Download</button></a></div></div>`;
+    `<div class="dl"><a href="${src}" download="${c.name}"><button type="button">Download</button></a>`+
+    (TIKTOK ? `<form method="post" action="${src}/tiktok" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='uploading…'"><button type="submit" class="tt">▶ TikTok</button></form>` : '')+
+    `</div></div>`;
   return el;
 }
 async function refresh() {

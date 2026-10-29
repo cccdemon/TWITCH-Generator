@@ -30,6 +30,7 @@ from . import oauth
 from . import pricing
 from . import timing
 from . import twitch as twitch_stage
+from . import upload as upload_stage
 from .config import data_dir, load_config, root_path
 from .jobs import manager
 from .models import TranscriptSegment
@@ -297,6 +298,7 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "base": BASE,
             "user": request.session.get("user"),
             "settings": current_view(),
+            "platforms": oauth.all_status(),
             "jobs": manager.list(),
             "vods": vods,
             "message": message,
@@ -456,8 +458,26 @@ def clips_vod(request: Request, vod_id: str, msg: str | None = None, _: str = De
             "label": _vod_label(vod_id),
             "usd": cost["usd"] if cost else None,
             "src_mb": _source_mb(data_dir() / vod_id),
+            "tiktok": oauth.status("tiktok"),
         },
     )
+
+
+@app.post("/clips/{vod_id}/{filename}/tiktok")
+def clip_to_tiktok(vod_id: str, filename: str, _: str = Depends(current_user)) -> RedirectResponse:
+    """Send one rendered clip to TikTok (inbox draft by default, see upload.tiktok in config)."""
+    if not (_SAFE_NAME.match(vod_id) and _SAFE_NAME.match(filename) and filename.endswith(".mp4")):
+        raise HTTPException(400, "bad name")
+    clips_root = (data_dir() / vod_id / "clips").resolve()
+    path = (clips_root / filename).resolve()
+    if not str(path).startswith(str(clips_root) + os.sep) or not path.is_file():
+        raise HTTPException(404, "no such clip")
+    tt = (load_config().get("upload") or {}).get("tiktok") or {}
+    title = next((c["title"] for c in _clips_detail(vod_id) if c["name"] == filename), filename)
+    res = upload_stage.tiktok_send(path, title=title, mode=str(tt.get("mode", "draft")),
+                                   privacy=str(tt.get("privacy_level", "SELF_ONLY")))
+    msg = f"TikTok: {res.url}" if res.ok else f"TikTok failed: {res.error}"
+    return RedirectResponse(f"{BASE}/clips/{vod_id}?msg=" + quote(msg), status_code=303)
 
 
 def _moments_list(vod_id: str) -> list[dict]:

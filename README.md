@@ -104,7 +104,7 @@ work for CLI runs too.
 | `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | VOD title/duration metadata (download works without it) |
 | `ANTHROPIC_API_KEY` | LLM moment detection (required) |
 | `YOUTUBE_CLIENT_SECRETS` / `YOUTUBE_TOKEN_FILE` | YouTube upload |
-| `TIKTOK_ACCESS_TOKEN` | TikTok upload |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` (+ `PUBLIC_URL`) | TikTok Connect (OAuth) |
 | `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_USER_ID` | Instagram Reels upload |
 
 ## Performance
@@ -130,9 +130,15 @@ Whisper runs with `beam_size: 1`; chat/audio/vision run in parallel with it.
   ```
   Paste the consent code once; the token is saved to `YOUTUBE_TOKEN_FILE` for reuse.
   Use a Desktop-app OAuth client from Google Cloud Console.
-- **TikTok** — uses the Content Posting API. Requires an approved TikTok developer app
-  and a user access token; unapproved apps can only post as `SELF_ONLY` (private). Wired up,
-  no-ops with a message if `TIKTOK_ACCESS_TOKEN` is unset.
+- **TikTok** — Content Posting API, two modes (`upload.tiktok.mode` in `config.yaml`):
+  - `draft` (default): the clip is uploaded into your TikTok **inbox**; you open the app,
+    add the caption and post. Works without TikTok's app audit and on public accounts.
+    Also available per clip via the **▶ TikTok** button on the clips page.
+  - `direct`: Direct Post. Unaudited apps may only post `SELF_ONLY` to a private account;
+    public Direct Post needs TikTok's app audit (`video.publish`).
+  Setup: create a TikTok developer app with Login Kit + Content Posting API, add
+  `<PUBLIC_URL>/oauth/tiktok/callback` as redirect URI, enter client key/secret in Settings,
+  click **Connect** under *Connected accounts*.
 - **Instagram Reels** — Graph API needs a *public* video URL, not a file upload. Host the
   clip on a CDN/bucket and pass its URL. Needs a Business/Creator IG account linked to a
   Facebook Page. No-ops with a message if token/URL missing.

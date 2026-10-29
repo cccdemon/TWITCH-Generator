@@ -13,11 +13,12 @@ from pathlib import Path
 from .config import data_dir
 
 # Editable keys exposed in the web UI. (key, label, secret?)
-# Upload runs download-first (post clips manually), so no OAuth/platform creds here.
 SETTING_KEYS: list[tuple[str, str, bool]] = [
     ("ANTHROPIC_API_KEY", "Anthropic API Key", True),
     ("TWITCH_CLIENT_ID", "Twitch Client ID", True),
     ("TWITCH_CLIENT_SECRET", "Twitch Client Secret", True),
+    ("TIKTOK_CLIENT_KEY", "TikTok Client Key", True),
+    ("TIKTOK_CLIENT_SECRET", "TikTok Client Secret", True),
 ]
 
 _KEYS = {k for k, _, _ in SETTING_KEYS}

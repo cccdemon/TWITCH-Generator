@@ -35,7 +35,7 @@ Stages are modules with one public function each. Every stage caches its output 
 | resolve + download | `twitch.py` | `info.json`, `<vod_id>.mp4` |
 | single-pass decode | `extract.py` | writes `audio_chunks/*.wav`, `frames/f_*.jpg` + `meta.json`, `loudness.json` in one ffmpeg run; purely an accelerator, every consumer still extracts on its own if missing |
 | Whisper | `transcribe.py` | `transcript.json` |
-| chat velocity | `chat.py` | `chat_messages.json` (raw replay via chat-downloader), `chat.json` |
+| chat velocity | `chat.py` | `chat_messages.json` (raw replay via Twitch public GQL), `chat.json` |
 | audio bursts | `audio.py` | `loudness.json` (raw ebur128), `audio.json` |
 | vision, two-tier | `vision.py` | `vision_triage.json` (Haiku, every grid frame), `frames/bursts/`, `vision.json` (Sonnet-confirmed), `facecam.json` |
 | text candidates (Claude) | `analyze.py` | none |

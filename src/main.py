@@ -244,7 +244,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     platforms = u.get("platforms", ["youtube"])
     privacy = u.get("privacy", "private")
     for cl in clips:
-        for res in upload_stage.upload_clip(cl, platforms, privacy):
+        for res in upload_stage.upload_clip(cl, platforms, privacy, tiktok=u.get("tiktok") or {}):
             tag = "[green]OK" if res.ok else "[red]FAIL"
             log(f"  {tag} {res.platform}: {res.url or res.error}")
 

@@ -125,3 +125,10 @@ upload:
   # (youtube | tiktok | instagram).
   platforms: []
   privacy: "public"   # youtube: private|unlisted|public
+  tiktok:
+    # draft  = upload into the creator's TikTok inbox; add caption + post in the app.
+    #          Works without TikTok app audit and on public accounts. (Recommended.)
+    # direct = Direct Post via API. Unaudited apps may only post SELF_ONLY to a
+    #          private account; public posting needs TikTok's app audit.
+    mode: draft
+    privacy_level: SELF_ONLY   # direct only: PUBLIC_TO_EVERYONE|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|SELF_ONLY

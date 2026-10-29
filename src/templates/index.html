@@ -88,6 +88,24 @@
       </div>
       <div class="row" style="margin-top:16px"><button type="submit">Save settings</button></div>
     </form>
+    <h3 style="margin:18px 0 6px">Connected accounts</h3>
+    <p class="muted" style="margin:0 0 10px;font-size:13px">OAuth per platform. Needs PUBLIC_URL in .env and the platform's client key/secret above. TikTok uploads land as drafts in your TikTok inbox (set <code>upload.tiktok.mode</code> in config.yaml for Direct Post).</p>
+    <div class="row" style="flex-wrap:wrap;gap:10px">
+      {% for p in platforms %}
+      <div class="row" style="gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 10px">
+        <strong>{{ p.label }}</strong>
+        {% if p.connected %}
+          <span class="badge set">connected{% if p.account %} · {{ p.account }}{% endif %}</span>
+          <form method="post" action="{{ base }}/oauth/{{ p.platform }}/disconnect" style="margin:0">
+            <button type="submit" class="ghost">Disconnect</button></form>
+        {% elif p.configured %}
+          <a href="{{ base }}/oauth/{{ p.platform }}/start"><button type="button" class="ghost">Connect</button></a>
+        {% else %}
+          <span class="badge unset">keys missing</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
   </section>
 
   <!-- VOD SELECTION -->
