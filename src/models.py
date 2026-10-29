@@ -43,6 +43,9 @@ class Moment:
     audio_score: float = 0.0
     text_score: float = 0.0
     video_score: float = 0.0
+    chat_score: float = 0.0
+    # Free-text hints carried into the refine pass (vision label, chat peak, ...).
+    hints: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

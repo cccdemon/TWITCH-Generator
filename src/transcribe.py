@@ -2,13 +2,34 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-from faster_whisper import WhisperModel
-
 from .models import TranscriptSegment
+
+
+def chunks_ready(chunk_dir: Path, chunk_seconds: int) -> bool:
+    """True if a complete chunk set for this chunk length is on disk."""
+    meta = chunk_dir / "meta.json"
+    if not meta.exists() or not any(chunk_dir.glob("chunk_*.wav")):
+        return False
+    try:
+        return int(json.loads(meta.read_text(encoding="utf-8")).get("chunk_seconds")) == int(chunk_seconds)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return False
+
+
+def reset_chunks(chunk_dir: Path) -> None:
+    if chunk_dir.exists():
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+
+def write_chunks_meta(chunk_dir: Path, chunk_seconds: int) -> None:
+    (chunk_dir / "meta.json").write_text(json.dumps({"chunk_seconds": int(chunk_seconds)}),
+                                         encoding="utf-8")
 
 
 def _split_audio_chunks(media_path: Path, out_dir: Path, chunk_seconds: int) -> list[Path]:
@@ -21,17 +42,21 @@ def _split_audio_chunks(media_path: Path, out_dir: Path, chunk_seconds: int) -> 
     multi-GB file in memory.
     """
     chunk_dir = out_dir / "audio_chunks"
-    chunk_dir.mkdir(parents=True, exist_ok=True)
-    existing = sorted(chunk_dir.glob("chunk_*.wav"))
-    if existing:
-        return existing
-    subprocess.run(
-        ["ffmpeg", "-y", "-nostdin", "-i", str(media_path),
-         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
-         "-f", "segment", "-segment_time", str(chunk_seconds),
-         str(chunk_dir / "chunk_%04d.wav")],
-        check=True,
-    )
+    if chunks_ready(chunk_dir, chunk_seconds):
+        return sorted(chunk_dir.glob("chunk_*.wav"))
+    reset_chunks(chunk_dir)  # stale length (timestamps would misalign) or partial set
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-nostdin", "-i", str(media_path),
+             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+             "-f", "segment", "-segment_time", str(chunk_seconds),
+             str(chunk_dir / "chunk_%04d.wav")],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        reset_chunks(chunk_dir)
+        raise
+    write_chunks_meta(chunk_dir, chunk_seconds)
     return sorted(chunk_dir.glob("chunk_*.wav"))
 
 
@@ -44,6 +69,7 @@ def transcribe(
     language: str | None = None,
     cpu_threads: int = 2,
     chunk_seconds: int = 1800,
+    beam_size: int = 1,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe to segments, chunk by chunk. Caches JSON to allow re-runs.
@@ -60,6 +86,8 @@ def transcribe(
     if on_progress:
         on_progress(0, total)
 
+    from faster_whisper import WhisperModel  # lazy: heavy import, keeps module light for extract.py
+
     wm = WhisperModel(model, device=device, compute_type=compute_type,
                       cpu_threads=cpu_threads, num_workers=1)
 
@@ -70,7 +98,7 @@ def transcribe(
             str(chunk),
             language=language,
             vad_filter=True,
-            beam_size=5,
+            beam_size=max(1, int(beam_size)),  # 1 = greedy, ~2-3x faster than 5
         )
         for seg in segments:
             out.append(TranscriptSegment(start=round(seg.start + offset, 2),

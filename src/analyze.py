@@ -1,7 +1,9 @@
 """LLM stage: Claude scans the transcript and marks highlight windows.
 
-Strategy: split the transcript into overlapping time chunks, ask Claude for the
-strongest moments per chunk (structured JSON via a tool), then merge + rank.
+Strategy: split the transcript into overlapping time chunks, ask Claude for
+candidate moments per chunk (structured JSON via a tool, empty list allowed),
+then merge. This is a CANDIDATE pass: scores are only comparable within a chunk.
+The refine stage re-scores all candidates side by side with full context.
 """
 from __future__ import annotations
 
@@ -78,11 +80,16 @@ def analyze(
     client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
 
     system = (
-        "You find short-form-worthy moments in Twitch stream transcripts. "
+        "You scan a Twitch stream transcript chunk for moments that could work as a "
+        "short-form clip (TikTok/Shorts). "
         f"Categories: {', '.join(categories)}. "
-        f"Each moment must be {min_clip_seconds:.0f}-{max_clip_seconds:.0f}s long, "
-        "self-contained, and land a clear payoff (laugh, big play, raw emotion, tension spike). "
-        "Use only timestamps present in the transcript. Be selective; quality over quantity."
+        f"Each moment is {min_clip_seconds:.0f}-{max_clip_seconds:.0f}s, starts at a sentence "
+        "start and ends right after a clear payoff (laugh, big play, raw emotion, tension spike). "
+        "Use only timestamps present in the transcript. The transcript is machine-generated "
+        "and noisy; ignore garbled lines. "
+        "Scoring: 0.9+ = would stop a scroll cold; 0.7 = clearly clip-worthy; 0.5 = mild payoff; "
+        "below 0.5 do not report. Most chunks of a stream contain NOTHING worth clipping — "
+        "return an empty list then. Report at most 5 per chunk."
     )
 
     found: list[Moment] = []
@@ -107,7 +114,7 @@ def analyze(
         found.extend(_parse(msg, categories, min_clip_seconds, max_clip_seconds))
 
     found.sort(key=lambda m: m.score, reverse=True)
-    return _dedupe(found)[:max_clips]
+    return _dedupe(found)[:max_clips]  # callers pass a candidate budget, not the final count
 
 
 def _parse(msg: Any, categories: list[str], lo: float, hi: float) -> list[Moment]:

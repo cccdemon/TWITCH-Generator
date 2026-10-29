@@ -15,6 +15,49 @@ whisper:
   language: de           # null = autodetect, or "en"/"de"
   cpu_threads: 3         # cores-1 (box has 4): fast transcription, 1 core free for UI/ffmpeg. nice -19 keeps the web responsive under load.
   chunk_seconds: 1800    # transcribe in 30-min chunks → bounded RAM on long VODs
+  beam_size: 1           # 1 = greedy (2-3x faster than 5); transcript is only a highlight hint
+
+# Shared grid for the time-series signals (chat, audio). Finer = sharper peaks.
+signals:
+  interval_seconds: 10
+  # Every signal is scored RELATIVE to a rolling median over this window, so a
+  # loud stream / busy chat is not "always exciting". 300 = ±2.5 min.
+  baseline_window_seconds: 300
+
+# Chat signal — Twitch chat replay velocity (emote spam, "clip it", laughter).
+# Strongest free signal: the audience already marked the moment. Needs no keys.
+chat:
+  enabled: true
+  lag_seconds: 8             # chat reacts after the moment; shift it back by this
+  highlight_threshold: 0.5   # min chat score to spawn a candidate window on its own
+
+# Audio signal — loudness bursts above the stream's own level (ffmpeg ebur128).
+audio:
+  enabled: true
+  scale_db: 8                # +8 dB above the local median == score 1.0
+
+# Video signal — two-tier Claude Vision (Star Citizen is visual).
+vision:
+  enabled: true
+  interval_seconds: 10       # grid frame every N seconds (explosions are short)
+  frame_width: 640           # triage frames, downscaled to save tokens
+  triage_model: "claude-haiku-4-5"   # tier 1: rough score for every grid frame
+  model: "claude-sonnet-4-6"         # tier 2 + facecam detection; must be vision-capable
+  max_frames_per_call: 16    # triage frames per request
+  concurrency: 4             # parallel Claude requests
+  triage_threshold: 0.4      # triage score that earns a tier-2 burst check
+  burst: true                # tier 2: 3 frames 1.5s apart around each hot peak
+  burst_width: 768
+  max_windows_per_call: 4    # bursts per tier-2 request (3 images each)
+  unconfirmed_discount: 0.6  # multiplier for frames tier 2 did not confirm
+  highlight_threshold: 0.5   # min visual_score to spawn a candidate window
+  categories:
+    - action
+    - pvp
+    - explosion
+    - ship_damage
+    - landing
+    - bug
 
 analyze:
   model: "claude-sonnet-4-6"
@@ -29,32 +72,23 @@ analyze:
     - exciting
     - skillful
 
-# Video signal — Claude Vision scores sampled frames (Star Citizen is visual).
-vision:
-  enabled: true
-  interval_seconds: 30       # one frame every N seconds
-  model: "claude-sonnet-4-6" # must be vision-capable
-  frame_width: 768           # downscale to save tokens
-  max_frames_per_call: 12    # frames per Claude request
-  highlight_threshold: 0.5   # min visual_score to start a vision-only clip
-  categories:
-    - action
-    - pvp
-    - explosion
-    - ship_damage
-    - landing
-    - bug
-
-# Audio signal — loudness peaks (explosions, shouting) via ffmpeg ebur128.
-audio:
-  enabled: true
-
-# Fusion — highlight = wA*audio + wT*text + wV*video (weights auto-normalized).
+# Fusion — highlight = wC*chat + wA*audio + wT*text + wV*video (weights auto-normalized).
 score:
   weights:
-    audio: 0.25
-    text: 0.35
-    video: 0.40
+    chat: 0.35
+    audio: 0.15
+    text: 0.25
+    video: 0.25
+  lead_seconds: 5            # lead-in before a chat/vision spike when building a window
+  candidate_factor: 3        # keep max_clips*factor candidates for the refine pass
+
+# Refine — one global Claude pass ranks all candidates side by side, drops
+# weak ones and snaps start/end onto sentence boundaries.
+refine:
+  enabled: true
+  model: null                # null = analyze.model
+  context_pad_seconds: 20    # transcript shown around each candidate
+  snap_tolerance_seconds: 2.5
 
 clip:
   # Auto-render clips in the pipeline. false = only detect highlight moments,
