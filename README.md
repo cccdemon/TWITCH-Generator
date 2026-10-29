@@ -138,7 +138,9 @@ Whisper runs with `beam_size: 1`; chat/audio/vision run in parallel with it.
     public Direct Post needs TikTok's app audit (`video.publish`).
   Setup: create a TikTok developer app with Login Kit + Content Posting API, add
   `<PUBLIC_URL>/oauth/tiktok/callback` as redirect URI, enter client key/secret in Settings,
-  click **Connect** under *Connected accounts*.
+  click **Connect** under *Connected accounts*. The developer portal needs public
+  Privacy Policy / Terms URLs: use `<PUBLIC_URL>/privacy` and `<PUBLIC_URL>/terms`
+  (served without login; set `OPERATOR_NAME` / `CONTACT_EMAIL` in `.env`).
 - **Instagram Reels** — Graph API needs a *public* video URL, not a file upload. Host the
   clip on a CDN/bucket and pass its URL. Needs a Business/Creator IG account linked to a
   Facebook Page. No-ops with a message if token/URL missing.

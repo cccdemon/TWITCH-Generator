@@ -239,7 +239,7 @@ def _startup() -> None:
 
 async def _require_login(request: Request, call_next):
     path = request.url.path  # proxy already stripped BASE; paths are unprefixed
-    if path in ("/login", "/health") or request.session.get("user"):
+    if path in ("/login", "/health", "/privacy", "/terms") or request.session.get("user"):
         return await call_next(request)
     if path.startswith("/api"):
         return JSONResponse({"detail": "auth required"}, status_code=401)
@@ -256,6 +256,30 @@ def current_user(request: Request) -> str:
 @app.get("/health")
 def health() -> JSONResponse:
     return JSONResponse({"ok": True})
+
+
+# Public legal pages (no login): platform developer portals (TikTok, Meta,
+# Google) require reachable Privacy Policy / Terms of Service URLs.
+_LEGAL_UPDATED = "2026-10-29"
+
+
+def _legal(request: Request, page: str, title: str) -> HTMLResponse:
+    return _TEMPLATES.TemplateResponse(
+        request, "legal.html",
+        {"base": BASE, "page": page, "title": title, "updated": _LEGAL_UPDATED,
+         "operator": os.environ.get("OPERATOR_NAME") or "the operator of this instance",
+         "contact": os.environ.get("CONTACT_EMAIL") or ""},
+    )
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy(request: Request) -> HTMLResponse:
+    return _legal(request, "privacy", "Privacy Policy")
+
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms(request: Request) -> HTMLResponse:
+    return _legal(request, "terms", "Terms of Service")
 
 
 # --------------------------------------------------------------------- auth ---

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} — TWITCH-Generator</title>
+<style>
+  body { margin:0; font:15px/1.6 system-ui,sans-serif; background:#0e0e12; color:#e6e6ea; }
+  main { max-width:760px; margin:0 auto; padding:32px 20px 60px; }
+  h1 { font-size:24px; margin:0 0 4px; } h2 { font-size:17px; margin:28px 0 8px; }
+  .sub { color:#9a9aa8; font-size:13px; margin:0 0 24px; }
+  a { color:#9146ff; } .dot { color:#9146ff; }
+  ul { padding-left:20px; } li { margin:4px 0; }
+  nav { font-size:13px; color:#9a9aa8; margin-bottom:20px; }
+</style>
+</head>
+<body>
+<main>
+  <nav><span class="dot">●</span> TWITCH-Generator · <a href="{{ base }}/privacy">Privacy Policy</a> · <a href="{{ base }}/terms">Terms of Service</a></nav>
+  <h1>{{ title }}</h1>
+  <p class="sub">Last updated {{ updated }} · Operator: {{ operator }}{% if contact %} · Contact: <a href="mailto:{{ contact }}">{{ contact }}</a>{% endif %}</p>
+
+  {% if page == "privacy" %}
+  <h2>1. What this service is</h2>
+  <p>TWITCH-Generator is a self-hosted tool that turns a Twitch VOD (video on demand) into short vertical clips. It is operated privately by {{ operator }} for their own Twitch content. Access to the tool itself is restricted to invited users with a login.</p>
+
+  <h2>2. Data we process</h2>
+  <ul>
+    <li><strong>Twitch VOD data.</strong> The public video, its title, and its public chat replay for the VOD being processed. Chat messages are used only to measure audience activity over time; they are stored on our server for the duration of processing and deleted together with the VOD's working files.</li>
+    <li><strong>Transcripts and analysis.</strong> The VOD's audio is transcribed on our server. Transcript excerpts and sampled video frames are sent to Anthropic's Claude API to identify highlight moments. Anthropic processes this data under its own <a href="https://www.anthropic.com/legal/privacy">privacy policy</a>; we do not send account data of any user there.</li>
+    <li><strong>Connected platform accounts (TikTok, YouTube, Instagram).</strong> If the operator connects a platform account via OAuth, we store the access and refresh tokens issued by that platform on our server. They are used solely to upload clips to that same account on the operator's request. We read only the basic profile information needed to display which account is connected (e.g. username / display name). We do not read followers, messages, or any other account data.</li>
+    <li><strong>Login and technical data.</strong> A session cookie for signed-in users, and ordinary server logs (IP address, request path, timestamp) kept for troubleshooting.</li>
+  </ul>
+
+  <h2>3. What we do not do</h2>
+  <ul>
+    <li>No advertising, no tracking pixels, no analytics services.</li>
+    <li>No selling or sharing of personal data with third parties. Data leaves our server only to the services named above (Twitch, Anthropic, and a platform the operator has explicitly connected) and only for the purpose described.</li>
+    <li>No automatic posting. Uploads to a connected platform happen only when the operator triggers them.</li>
+  </ul>
+
+  <h2>4. Storage and retention</h2>
+  <p>All data is stored on a server operated by {{ operator }} in the European Union. VOD working files (video, transcript, chat replay, frames) are kept until the operator deletes the VOD from the tool. Platform OAuth tokens are kept until the operator disconnects the account, which deletes them immediately. You can also revoke access at any time in the respective platform's settings (e.g. TikTok → Settings → Security → Apps and services).</p>
+
+  <h2>5. Your rights</h2>
+  <p>Under the GDPR you can request access to, correction of, or deletion of personal data we hold about you, and you can object to its processing. Contact the operator{% if contact %} at <a href="mailto:{{ contact }}">{{ contact }}</a>{% endif %}. You also have the right to lodge a complaint with a data protection supervisory authority.</p>
+
+  <h2>6. Changes</h2>
+  <p>We may update this policy; the date above shows the current version.</p>
+
+  {% else %}
+  <h2>1. Scope</h2>
+  <p>These terms govern the use of TWITCH-Generator ("the service"), a private, self-hosted tool operated by {{ operator }} that produces short clips from Twitch VODs and can upload them to the operator's own accounts on third-party platforms.</p>
+
+  <h2>2. Access</h2>
+  <p>The service is not open to the public. Use requires a login issued by the operator. Accounts may be revoked at any time. Connecting a third-party platform account (TikTok, YouTube, Instagram) is voluntary and authorises the service to upload clips to that account only when the operator triggers an upload.</p>
+
+  <h2>3. Content</h2>
+  <p>Users may only process VODs they own or have the right to use. The user is responsible for ensuring that clips and uploads comply with the rules of the source platform (Twitch) and of each target platform (e.g. the TikTok Community Guidelines and Terms of Service). The service does not claim any rights in the processed content.</p>
+
+  <h2>4. Third-party services</h2>
+  <p>The service relies on Twitch, Anthropic (Claude API), and the platforms a user connects. Their availability, rate limits and policies are outside our control. Use of those platforms through the service is also subject to their own terms.</p>
+
+  <h2>5. No warranty, limitation of liability</h2>
+  <p>The service is provided "as is" without warranty of any kind. Highlight detection and automatic cropping are heuristic and may produce unusable results. To the extent permitted by law, the operator is not liable for lost content, missed uploads, platform sanctions, or any indirect damages arising from use of the service.</p>
+
+  <h2>6. Termination</h2>
+  <p>The operator may suspend or stop the service at any time. Users can disconnect platform accounts at any time; this deletes the stored tokens.</p>
+
+  <h2>7. Governing law</h2>
+  <p>German law applies. Mandatory consumer protection rules of your country of residence remain unaffected.</p>
+
+  <h2>8. Contact</h2>
+  <p>Questions about these terms: {{ operator }}{% if contact %}, <a href="mailto:{{ contact }}">{{ contact }}</a>{% endif %}.</p>
+  {% endif %}
+</main>
+</body>
+</html>
