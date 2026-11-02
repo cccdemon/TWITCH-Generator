@@ -1,0 +1,7 @@
+# Shell scripts and cloud-init files must stay LF even on Windows checkouts
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.service text eol=lf
+deploy/local/usb/autoinstall/user-data text eol=lf
+*.ps1 text eol=crlf
