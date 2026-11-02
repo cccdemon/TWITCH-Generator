@@ -176,7 +176,8 @@
   const k = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + " M" : n >= 1e3 ? (n / 1e3).toFixed(1) + " k" : String(n);
   const f1 = (n) => n == null ? "–" : Number(n).toFixed(1);
   const f0 = (n) => n == null ? "–" : Math.round(n);
-  const val = (id, v, c) => { const el = $(id); const small = el.querySelector("small"); el.innerHTML = `<span class="${c || ""}">${v}</span>`; if (small) el.appendChild(small); };
+  const val = (id, v, c) => { const el = $(id); if (el.dataset.unit == null) { const s = el.querySelector("small"); el.dataset.unit = s ? s.textContent : ""; }
+    el.innerHTML = `<span class="${c || ""}">${v}</span>` + (el.dataset.unit ? `<small>${el.dataset.unit}</small>` : ""); };
   const note = (id, t) => { $(id).innerHTML = t; };
 
   async function discover() {
@@ -193,7 +194,7 @@
     }
     if (dev) { powerCap = hw ? await num(hw + "/power1_cap", 1e6) : null; vramTotal = await num(dev + "/mem_info_vram_total", 1e9); }
     $("g-cap").textContent = gpuName || (dev ? "AMD-Grafikkarte" : "Keine Grafikkarte gefunden");
-    $("lead").innerHTML = `<b>${location.hostname}</b>, ${ncpu} CPU-Threads${vramTotal ? `, ${vramTotal.toFixed(0)} GB Grafikspeicher` : ""}. Werte alle 2 Sekunden aus /sys, Pipeline aus ${DATA}.<span id="err"></span>`;
+    $("lead").innerHTML = `<b>${location.hostname || "clipbox"}</b>, ${ncpu} CPU-Threads${vramTotal ? `, ${vramTotal.toFixed(0)} GB Grafikspeicher` : ""}. Werte alle 2 Sekunden aus /sys, Pipeline aus ${DATA}.<span id="err"></span>`;
   }
 
   async function cpuPct() {
@@ -207,8 +208,10 @@
 
   function gauge(busy, tj) {
     const r = 50, circ = 2 * Math.PI * r, p = Math.max(0, Math.min(100, busy || 0));
-    $("ring").setAttribute("stroke-dasharray", `${circ * p / 100} ${circ}`);
-    $("ring").style.stroke = css(p >= 90 ? "--blue" : "--blue");
+    const ring = $("ring");
+    ring.setAttribute("stroke-dasharray", `${circ * p / 100} ${circ}`);
+    ring.setAttribute("stroke-linecap", p > 1 ? "round" : "butt");   // no stray dot at 0 %
+    ring.style.stroke = css("--blue");
     $("g-val").textContent = busy == null ? "–" : `${busy}`;
     const t = $("g-temp"); t.textContent = tj == null ? "" : `${Math.round(tj)} °C`; t.setAttribute("fill", css(tj == null ? "--mut" : tj >= 105 ? "--red" : tj >= 90 ? "--gold" : "--green"));
   }
@@ -272,10 +275,12 @@
     const total = Math.max(1, (running ? now : (m.updated || now)) - (m.started || now));
     $("timeline").innerHTML = STAGES.map(([key, label]) => {
       const s = stages[key]; const end = s ? (s.end || (running ? now : m.updated)) : null;
-      const w = s ? Math.max(6, 100 * (end - s.start) / total) : 6;
       const c = key === cur ? "now" : (s && s.end) ? "done" : "";
       const title = s ? `${label}: ${dur(end - s.start)}` : `${label}: ausstehend`;
-      return `<div class="seg ${c}" style="flex-grow:${w.toFixed(1)}" title="${title}"><span>${label}${s ? " " + dur(end - s.start) : ""}</span></div>`;
+      // finished/current stages share the width in proportion to their duration;
+      // pending stages keep their natural label width so nothing gets clipped
+      const style = s ? `flex:${Math.max(8, 100 * (end - s.start) / total).toFixed(1)} 1 0` : "flex:0 0 auto;padding:0 10px";
+      return `<div class="seg ${c}" style="${style}" title="${title}"><span>${label}${s ? " " + dur(end - s.start) : ""}</span></div>`;
     }).join("");
     const vodS = run ? run.vod_seconds : null, elapsed = total;
     $("f-vod").textContent = vodS ? dur(vodS) : "–";
@@ -290,7 +295,7 @@
       val("t-gen", f1(last.gen_tok_s), clsLow(last.gen_tok_s, 15, 6)); note("t-gen-n", `Ø ${f1(l.gen_tok_s_avg)} tok/s, zuletzt ${(last.model || "").replace("ollama/", "")}`);
     } else { val("t-gen", "–"); note("t-gen-n", "noch kein Modellaufruf"); }
     val("t-pre", last && last.prefill_tok_s ? f0(last.prefill_tok_s) : "–"); note("t-pre-n", last ? `letzter Prompt ${k(last.prompt_tokens)} Tokens in ${last.wall_s} s` : "");
-    val("t-tok", `${k(l.input_tokens || 0)} <small>rein</small> ${k(l.output_tokens || 0)} <small>raus</small>`); note("t-tok-n", `${l.calls || 0} Aufrufe${l.usd ? `, $${l.usd.toFixed(2)} API` : ", $0 lokal"}`);
+    val("t-tok", k(l.input_tokens || 0)); note("t-tok-n", `rein, ${k(l.output_tokens || 0)} raus, ${l.calls || 0} Aufrufe${l.usd ? `, $${l.usd.toFixed(2)} API` : ", $0 lokal"}`);
     const w = m.whisper || {};
     if (w.chunks_total) { val("t-wh", `${w.chunks_done}/${w.chunks_total}`, ""); note("t-wh-n", w.factor != null ? `${w.factor} × Echtzeit, ${w.model || ""}` : `${w.backend || ""} ${w.model || ""}`); }
     else { val("t-wh", "–"); note("t-wh-n", "Transkript aus dem Cache"); }
