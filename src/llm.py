@@ -45,13 +45,16 @@ _OLLAMA_DEFAULTS = {
     "base_url": "http://ollama:11434",
     "text_model": "qwen3:14b",
     "vision_model": "qwen3-vl:8b",
-    "num_ctx": {"text": 32768, "vision": 8192},
+    "num_ctx": {"text": 32768, "vision": 32768},
     "timeout_seconds": 600,
 }
 _JSON_ONLY = "Return ONLY the JSON object."
 _CHARS_PER_TOKEN = 3.0          # conservative estimate for the num_ctx warning
-_IMAGE_TOKENS = 400             # rough per-image budget (640px grid frame on qwen3-vl)
+# Measured on qwen3-vl:8b: a 640x360 JPEG costs ~1085 prompt tokens, a 768px burst
+# frame ~1500. Images cannot be truncated, so a batch over num_ctx is a hard 400.
+_IMAGE_TOKENS = 1100
 _CTX_WARN_FRACTION = 0.9
+_CTX_IMAGE_BUDGET = 0.85        # share of num_ctx that images may fill in one call
 
 
 @dataclass
@@ -112,6 +115,21 @@ def model_for(role: str, cfg: dict | None, claude_model: str) -> str:
 def vision_concurrency(cfg: dict | None, configured: int) -> int:
     """Ollama serialises per model anyway; parallel requests only risk timeouts."""
     return 1 if provider(cfg) == PROVIDER_OLLAMA else max(1, int(configured))
+
+
+def images_per_call(cfg: dict | None, requested: int, *, image_tokens: int = _IMAGE_TOKENS,
+                    text_tokens: int = 1500) -> int:
+    """Cap the images in one vision call so prompt + images fit llm.ollama.num_ctx.vision.
+
+    Anthropic has no such limit → `requested` unchanged. Under ollama the cap is
+    derived from num_ctx; the caller splits its batches accordingly.
+    """
+    requested = max(1, int(requested))
+    if provider(cfg) != PROVIDER_OLLAMA:
+        return requested
+    num_ctx = int(ollama_cfg(cfg)["num_ctx"]["vision"])
+    fit = int((num_ctx * _CTX_IMAGE_BUDGET - text_tokens) // image_tokens)
+    return max(1, min(requested, fit))
 
 
 def describe(cfg: dict | None) -> str:
@@ -293,7 +311,18 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
                 data = resp.json()
         except httpx.HTTPError as e:
             last_err = e
-            log(f"[yellow]llm: ollama request failed ({type(e).__name__}: {e}) — attempt {attempt + 1}/2")
+            body = ""
+            resp_obj = getattr(e, "response", None)
+            if resp_obj is not None:
+                try:
+                    body = f" — server said: {resp_obj.text[:300]}"
+                except Exception:  # noqa: BLE001
+                    body = ""
+            log(f"[yellow]llm: ollama request failed ({type(e).__name__}: {e}){body} — attempt {attempt + 1}/2")
+            if resp_obj is not None and resp_obj.status_code == 400:
+                # a 400 is deterministic (context overflow, bad schema) — retrying is pointless
+                last_err = LLMError(f"ollama/{model} 400: {resp_obj.text[:300]}")
+                break
             continue
         wall = time.time() - t0
 

@@ -17,7 +17,7 @@ llm:
     vision_model: qwen3-vl:8b      # triage, confirm, facecam
     num_ctx:                       # refine prompts reach ~25k tokens; needs OLLAMA_FLASH_ATTENTION + q8 KV (compose)
       text: 32768
-      vision: 8192
+      vision: 32768                # one 640px frame ≈ 1100 tokens on qwen3-vl → 16 frames/call ≈ 17.5k (measured 2026-11-02)
     timeout_seconds: 600
 
 whisper:

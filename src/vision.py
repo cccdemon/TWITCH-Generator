@@ -231,8 +231,11 @@ def triage_frames(
         "in progress is 0.8+. Score each shown frame by its index."
     )
     ts_by_index = {idx: t for idx, t, _ in frames}
+    # Under ollama every image costs ~1100 prompt tokens and cannot be truncated,
+    # so the batch is capped to what fits num_ctx.vision.
+    per_call = llm.images_per_call(cfg, max_frames_per_call)
     batches: list[list[Part]] = []
-    for chunk in _batches(frames, max_frames_per_call):
+    for chunk in _batches(frames, per_call):
         content: list[Part] = [TextPart("Score these frames. Each image is preceded by its frame index.")]
         for idx, _t, path in chunk:
             content.append(TextPart(f"index {idx}:"))
@@ -240,8 +243,10 @@ def triage_frames(
         batches.append(content)
 
     out: list[VisionFrame] = []
+    # The structured answer is ~150-250 tokens per frame once the model pretty-prints it.
     for data in _call_batches(model=model, system=system, tool=_FRAME_TOOL, batches=batches,
-                              concurrency=concurrency, cfg=cfg, meter=meter):
+                              concurrency=concurrency, cfg=cfg, meter=meter,
+                              max_tokens=max(2048, 320 * per_call)):
         for fr in _items(data, "frames"):
             idx = fr.get("index")
             if idx not in ts_by_index:
@@ -288,8 +293,11 @@ def confirm_windows(
         "visual_score and a short label of what happens. Be strict: steady flight, menus, "
         "walking, talking to NPCs are below 0.3 even if the HUD is busy."
     )
+    imgs_per_burst = max(1, max(len(b[1]) for b in bursts))
+    # 768px burst frames cost ~1500 tokens each on qwen3-vl; cap windows per call to fit num_ctx.
+    per_call = max(1, llm.images_per_call(cfg, max_windows_per_call * imgs_per_burst, image_tokens=1500) // imgs_per_burst)
     batches: list[list[Part]] = []
-    for chunk in _batches(bursts, max_windows_per_call):
+    for chunk in _batches(bursts, per_call):
         content: list[Part] = [TextPart("Score these moments. Each burst is preceded by its moment index.")]
         for idx, imgs in chunk:
             content.append(TextPart(f"moment {idx}:"))
@@ -299,7 +307,8 @@ def confirm_windows(
 
     out: dict[int, tuple[float, dict[str, float], str]] = {}
     for data in _call_batches(model=model, system=system, tool=_BURST_TOOL, batches=batches,
-                              concurrency=concurrency, cfg=cfg, meter=meter):
+                              concurrency=concurrency, cfg=cfg, meter=meter,
+                              max_tokens=max(2048, 320 * per_call)):
         for it in _items(data, "moments"):
             idx = it.get("index")
             if not isinstance(idx, int) or idx < 0 or idx >= len(peaks):
