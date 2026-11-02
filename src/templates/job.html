@@ -41,6 +41,8 @@
       <div class="tile"><h4>Whisper</h4><div class="big" id="m-wh">–</div><div class="sub" id="m-wh-sub"></div></div>
       <div class="tile"><h4>Vision</h4><div class="big" id="m-vis">–</div><div class="sub" id="m-vis-sub"></div></div>
       <div class="tile"><h4>GPU · Ollama</h4><div class="big" id="m-gpu">–</div><div class="sub" id="m-gpu-sub"></div></div>
+      <div class="tile"><h4>GPU · Hardware</h4><div class="big" id="m-hw">–</div><div class="sub" id="m-hw-sub"></div><div class="bar"><i id="m-hw-bar"></i></div></div>
+      <div class="tile"><h4>CPU · RAM</h4><div class="big" id="m-sys">–</div><div class="sub" id="m-sys-sub"></div></div>
       <div class="tile"><h4>Cost</h4><div class="big" id="m-cost">–</div><div class="sub" id="m-cost-sub"></div></div>
     </div>
   </div>
@@ -128,6 +130,33 @@ function renderMetrics(d) {
   // cost
   $('m-cost').textContent = `$${(l.usd || 0).toFixed(l.usd ? 4 : 2)}`;
   $('m-cost-sub').textContent = d.provider === 'ollama' ? 'local models, $0' : 'Anthropic API spend so far';
+  renderSystem(d.system);
+}
+
+const tempCls = (t, warn, bad) => t == null ? '' : t >= bad ? 'bad' : t >= warn ? 'warn' : 'ok';
+function renderSystem(s) {
+  if (!s) return;
+  const g = s.gpu || {};
+  if (g.busy_pct != null) {
+    const t = g.temps || {};
+    const hot = t.junction ?? t.edge;
+    $('m-hw').innerHTML = `${g.busy_pct}% busy · <span class="${tempCls(hot, 90, 105)}">${hot ?? '–'}°C</span>`;
+    const parts = [];
+    if (t.edge != null) parts.push(`edge ${t.edge}°`);
+    if (t.junction != null) parts.push(`hotspot ${t.junction}°`);
+    if (t.mem != null) parts.push(`<span class="${tempCls(t.mem, 95, 105)}">VRAM ${t.mem}°</span>`);
+    if (g.power_w != null) parts.push(`${g.power_w}${g.power_cap_w ? '/' + g.power_cap_w : ''} W`);
+    if (g.fan_rpm != null) parts.push(`${g.fan_rpm} rpm`);
+    if (g.vram_used_gb != null) parts.push(`VRAM ${g.vram_used_gb}/${g.vram_total_gb} GB`);
+    if (g.sclk_mhz) parts.push(`${g.sclk_mhz} MHz`);
+    $('m-hw-sub').innerHTML = parts.join(' · ');
+    $('m-hw-bar').style.width = g.busy_pct + '%';
+  } else { $('m-hw').textContent = '–'; $('m-hw-sub').textContent = 'no amdgpu sensors visible'; }
+  const c = s.cpu || {}, m = s.mem || {};
+  const ct = c.temp_c;
+  $('m-sys').innerHTML = (ct != null ? `<span class="${tempCls(ct, 80, 90)}">CPU ${ct}°C</span>` : 'CPU –') +
+    (c.load1 != null ? ` · load ${c.load1}${c.ncpu ? '/' + c.ncpu : ''}` : '');
+  $('m-sys-sub').textContent = m.total_gb ? `RAM ${m.used_gb}/${m.total_gb} GB (${m.used_pct}%)` : '';
 }
 
 async function pollMetrics() {

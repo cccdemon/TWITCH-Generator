@@ -36,10 +36,36 @@
 <body>
 <header>
   <span class="dot">●</span><h1>TWITCH-Generator</h1>
+  <span id="sysbar" class="muted" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin-left:12px" title="host sensors, refreshed every 5 s"></span>
   <span style="flex:1"></span>
   <span class="muted">{{ user }}</span>
   <a href="{{ base }}/logout" class="muted">logout</a>
 </header>
+<script>
+(function () {
+  const base = "{{ base }}";
+  const el = document.getElementById('sysbar');
+  const cls = (t, w, b) => t == null ? '' : t >= b ? 'color:#ff5470' : t >= w ? 'color:#ffcc66' : 'color:#3ecf8e';
+  async function tick() {
+    try {
+      const r = await fetch(`${base}/api/system`); if (!r.ok) return;
+      const d = await r.json(); const s = d.system || {}; const g = s.gpu || {}, c = s.cpu || {}, m = s.mem || {};
+      const parts = [];
+      if (g.busy_pct != null) {
+        const t = (g.temps || {}); const hot = t.junction ?? t.edge;
+        parts.push(`GPU <b>${g.busy_pct}%</b>` + (hot != null ? ` <span style="${cls(hot, 90, 105)}">${hot}°C</span>` : '') + (g.power_w != null ? ` ${g.power_w} W` : '') + (g.vram_used_gb != null ? ` · VRAM ${g.vram_used_gb}/${g.vram_total_gb} GB` : ''));
+      }
+      if (c.temp_c != null || c.load1 != null) parts.push(`CPU` + (c.temp_c != null ? ` <span style="${cls(c.temp_c, 80, 90)}">${c.temp_c}°C</span>` : '') + (c.load1 != null ? ` · load ${c.load1}` : ''));
+      if (m.total_gb) parts.push(`RAM ${m.used_gb}/${m.total_gb} GB`);
+      const o = d.ollama && d.ollama.models && d.ollama.models[0];
+      if (o) parts.push(`${o.name} loaded (${o.gpu_pct}% GPU)`);
+      el.innerHTML = parts.map(p => `<span>${p}</span>`).join('');
+    } catch (e) {}
+    setTimeout(tick, 5000);
+  }
+  tick();
+})();
+</script>
 <main>
 
   {% if message %}<div class="msg">{{ message }}</div>{% endif %}

@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import clip as clip_stage
 from . import oauth
 from . import pricing
+from . import sysmon
 from . import timing
 from . import twitch as twitch_stage
 from . import upload as upload_stage
@@ -515,7 +516,19 @@ def api_job_metrics(job_id: str, _: str = Depends(current_user)) -> JSONResponse
         if job.status == "running":
             out["ollama"] = _ollama_ps(cfg)
         out["provider"] = (cfg.get("llm") or {}).get("provider", "anthropic")
+    out["system"] = sysmon.read()
     return JSONResponse(out)
+
+
+@app.get("/api/system")
+def api_system(_: str = Depends(current_user)) -> JSONResponse:
+    """Host sensors (GPU busy/temps/power/VRAM, CPU temp/load, RAM) + loaded Ollama models."""
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        cfg = {}
+    return JSONResponse({"now": time.time(), "system": sysmon.read(), "ollama": _ollama_ps(cfg),
+                         "busy": any(j.status in ("running", "queued") for j in manager.list())})
 
 
 # --------------------------------------------------------------- clips ---
