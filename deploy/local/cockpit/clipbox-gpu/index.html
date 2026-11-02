@@ -6,99 +6,194 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="../base1/cockpit.js"></script>
 <style>
-  :root { --bg:#fff; --fg:#151515; --mut:#6a6e73; --line:#d2d2d2; --card:#f5f5f5; --acc:#06c; --ok:#3e8635; --warn:#f0ab00; --bad:#c9190b; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#f0f0f0; --mut:#a0a0a0; --line:#3c3f42; --card:#212427; --acc:#73bcf7; } }
-  body { margin:0; padding:20px 24px; font:14px/1.45 "RedHatText", system-ui, sans-serif; background:var(--bg); color:var(--fg); }
-  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:13px; letter-spacing:.05em; text-transform:uppercase; color:var(--mut); margin:22px 0 10px; }
-  .sub { color:var(--mut); margin-bottom:6px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; }
-  .tile { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; min-height:88px; }
-  .tile h4 { margin:0 0 6px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); }
-  .big { font-size:24px; font-weight:600; line-height:1.15; } .small { color:var(--mut); font-size:13px; margin-top:4px; }
-  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
-  .bar { height:7px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:10px; } .bar > i { display:block; height:100%; background:var(--acc); width:0; transition:width .3s; }
-  .stages { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 12px; }
-  .stage { padding:3px 10px; border-radius:999px; border:1px solid var(--line); font-size:12px; color:var(--mut); }
-  .stage.done { border-color:var(--ok); color:var(--ok); } .stage.now { border-color:var(--warn); color:var(--warn); font-weight:600; }
-  .chart { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:12px; }
-  .chart h4 { margin:0 0 8px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); display:flex; gap:14px; flex-wrap:wrap; }
-  .chart h4 span::before { content:"■ "; }
-  canvas { width:100%; height:130px; display:block; }
-  #err { color:var(--bad); } a { color:var(--acc); }
-  table { width:100%; border-collapse:collapse; font-size:13px; } td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); } th { color:var(--mut); font-weight:600; }
+  @font-face { font-family: "RedHatText"; src: url("../static/fonts/RedHatText/RedHatTextVF.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+  @font-face { font-family: "RedHatDisplay"; src: url("../static/fonts/RedHatDisplay/RedHatDisplayVF.woff2") format("woff2"); font-weight: 300 900; font-display: swap; }
+
+  :root {
+    --bg:#f0f0f0; --card:#ffffff; --fg:#151515; --mut:#6a6e73; --line:#d2d2d2; --track:#e7e7e7;
+    --blue:#0066cc; --green:#3e8635; --orange:#ec7a08; --red:#c9190b; --purple:#6753ac; --gold:#f0ab00;
+    --shadow: 0 1px 2px rgba(3,3,3,.12), 0 0 2px rgba(3,3,3,.06);
+  }
+  html.pf-v5-theme-dark, html.pf-v6-theme-dark, html.pf-theme-dark {
+    --bg:#151515; --card:#212427; --fg:#f0f0f0; --mut:#b8bbbe; --line:#3c3f42; --track:#2f3237;
+    --blue:#73bcf7; --green:#5ba352; --orange:#f4b678; --red:#f0561d; --purple:#b2a3ff; --gold:#f6d173;
+    --shadow: none;
+  }
+  @media (prefers-color-scheme: dark) { html:not(.pf-v5-theme-light):not(.pf-v6-theme-light):not(.pf-theme-light) {
+    --bg:#151515; --card:#212427; --fg:#f0f0f0; --mut:#b8bbbe; --line:#3c3f42; --track:#2f3237;
+    --blue:#73bcf7; --green:#5ba352; --orange:#f4b678; --red:#f0561d; --purple:#b2a3ff; --gold:#f6d173; --shadow:none; } }
+
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; font:14px/1.5 "RedHatText", "Red Hat Text", system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  h1 { font:600 24px/1.2 "RedHatDisplay", "Red Hat Display", system-ui, sans-serif; margin:0; }
+  h2 { font:600 15px/1.3 "RedHatDisplay", "Red Hat Display", system-ui, sans-serif; margin:28px 0 12px; }
+  .lead { color:var(--mut); margin:4px 0 20px; }
+  .lead b { color:var(--fg); font-weight:500; }
+  #err:not(:empty) { color:var(--red); margin-left:8px; }
+  a { color:var(--blue); }
+
+  /* ---- hero: gauge + pipeline timeline ---- */
+  .hero { display:grid; grid-template-columns: 240px 1fr; gap:20px; }
+  @media (max-width: 760px) { .hero { grid-template-columns: 1fr; } }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:18px 20px; }
+  .gauge { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+  .gauge svg { width:184px; height:184px; display:block; }
+  .gauge .ring-bg { stroke:var(--track); } .gauge .ring { stroke:var(--blue); transition: stroke-dasharray .6s ease; }
+  .gauge .val { font:600 40px/1 "RedHatDisplay", system-ui, sans-serif; fill:var(--fg); }
+  .gauge .unit { font:500 13px/1 "RedHatText", system-ui, sans-serif; fill:var(--mut); }
+  .gauge .temp { font:600 15px/1 "RedHatText", system-ui, sans-serif; }
+  .gauge figcaption { color:var(--mut); margin-top:6px; font-size:13px; }
+
+  .job-head { display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  .job-title { font-weight:600; font-size:16px; }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--mut); }
+  .status::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--mut); }
+  .status.running::before { background:var(--gold); animation: pulse 1.6s ease-in-out infinite; }
+  .status.done::before { background:var(--green); } .status.error::before, .status.interrupted::before, .status.cancelled::before { background:var(--red); }
+  @keyframes pulse { 50% { opacity:.35; } }
+  @media (prefers-reduced-motion: reduce) { .status.running::before { animation:none; } .gauge .ring { transition:none; } }
+
+  .timeline { display:flex; gap:3px; margin:16px 0 8px; height:34px; }
+  .seg { flex:1 1 0; min-width:28px; border-radius:4px; background:var(--track); position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--mut); white-space:nowrap; }
+  .seg.done { background:color-mix(in srgb, var(--green) 28%, var(--track)); color:var(--fg); }
+  .seg.now { background:color-mix(in srgb, var(--blue) 22%, var(--track)); color:var(--fg); outline:2px solid var(--blue); outline-offset:-2px; }
+  .seg.now::after { content:""; position:absolute; inset:0 auto 0 0; width:var(--p, 0%); background:color-mix(in srgb, var(--blue) 35%, transparent); }
+  .seg span { position:relative; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px 18px; margin-top:14px; }
+  .fact small { display:block; color:var(--mut); font-size:12px; }
+  .fact b { font-weight:600; font-size:16px; }
+
+  /* ---- metric tiles with sparklines ---- */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:12px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:12px 14px 10px; display:grid; grid-template-rows:auto auto 1fr; gap:2px; min-height:110px; }
+  .tile .name { color:var(--mut); font-size:13px; }
+  .tile .value { font:600 24px/1.15 "RedHatDisplay", system-ui, sans-serif; }
+  .tile .value small { font:500 13px/1 "RedHatText", system-ui, sans-serif; color:var(--mut); margin-left:3px; }
+  .tile .note { color:var(--mut); font-size:12px; min-height:16px; }
+  .tile canvas { width:100%; height:30px; display:block; margin-top:6px; align-self:end; }
+  .ok { color:var(--green); } .warn { color:var(--gold); } .bad { color:var(--red); }
+
+  .chart { background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:14px 16px 10px; }
+  .chart header { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:13px; color:var(--mut); margin-bottom:6px; }
+  .chart header b { color:var(--fg); font-weight:600; }
+  .legend { display:flex; gap:14px; } .legend i { display:inline-block; width:10px; height:3px; border-radius:2px; vertical-align:middle; margin-right:5px; }
+  .chart canvas { width:100%; height:150px; display:block; }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); } th { color:var(--mut); font-weight:500; } tr:last-child td { border-bottom:0; }
+  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
 <h1>ClipBox Monitor</h1>
-<div class="sub" id="dev">liest /sys, /opt/twitch-generator/data und Ollama … <span id="err"></span></div>
+<p class="lead" id="lead">Verbinde mit /sys und Ollama …<span id="err"></span></p>
 
-<h2>Pipeline</h2>
-<div class="sub" id="job">kein Job</div>
-<div class="stages" id="stages"></div>
+<section class="hero">
+  <figure class="panel gauge" aria-label="GPU-Auslastung">
+    <svg viewBox="0 0 120 120" role="img">
+      <circle class="ring-bg" cx="60" cy="60" r="50" fill="none" stroke-width="10"/>
+      <circle class="ring" id="ring" cx="60" cy="60" r="50" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 314" transform="rotate(-90 60 60)"/>
+      <text class="val" id="g-val" x="60" y="58" text-anchor="middle">–</text>
+      <text class="unit" x="60" y="74" text-anchor="middle">GPU-Last</text>
+      <text class="temp" id="g-temp" x="60" y="92" text-anchor="middle">–</text>
+    </svg>
+    <figcaption id="g-cap">AMD-Grafikkarte</figcaption>
+  </figure>
+
+  <div class="panel">
+    <div class="job-head">
+      <div class="job-title" id="j-title">Kein Job</div>
+      <span class="status" id="j-status">bereit</span>
+    </div>
+    <div class="timeline" id="timeline" aria-label="Pipeline-Stufen"></div>
+    <div class="facts">
+      <div class="fact"><small>Stream-Länge</small><b id="f-vod">–</b></div>
+      <div class="fact"><small>Laufzeit</small><b id="f-elapsed">–</b></div>
+      <div class="fact"><small>Verbleibend (Schätzung)</small><b id="f-eta">–</b></div>
+      <div class="fact"><small>Tempo</small><b id="f-factor">–</b></div>
+      <div class="fact"><small>Geladenes Modell</small><b id="f-model">–</b></div>
+    </div>
+  </div>
+</section>
+
+<h2>Modelle</h2>
 <div class="grid">
-  <div class="tile"><h4>Fortschritt</h4><div class="big" id="p-stage">–</div><div class="small" id="p-eta"></div><div class="bar"><i id="p-bar"></i></div></div>
-  <div class="tile"><h4>Stream-Länge · Laufzeit</h4><div class="big" id="p-time">–</div><div class="small" id="p-time-sub"></div></div>
-  <div class="tile"><h4>Tokens</h4><div class="big" id="p-tok">–</div><div class="small" id="p-tok-sub"></div></div>
-  <div class="tile"><h4>Tokens / s</h4><div class="big" id="p-toks">–</div><div class="small" id="p-toks-sub"></div></div>
-  <div class="tile"><h4>Whisper</h4><div class="big" id="p-wh">–</div><div class="small" id="p-wh-sub"></div></div>
-  <div class="tile"><h4>Vision</h4><div class="big" id="p-vis">–</div><div class="small" id="p-vis-sub"></div></div>
-  <div class="tile"><h4>Clips · Kosten</h4><div class="big" id="p-clips">–</div><div class="small" id="p-clips-sub"></div></div>
-  <div class="tile"><h4>Ollama</h4><div class="big" id="p-ol">–</div><div class="small" id="p-ol-sub"></div></div>
+  <div class="tile"><span class="name">Generierung</span><span class="value" id="t-gen">–<small>tok/s</small></span><span class="note" id="t-gen-n"></span><canvas data-spark="gen"></canvas></div>
+  <div class="tile"><span class="name">Prefill</span><span class="value" id="t-pre">–<small>tok/s</small></span><span class="note" id="t-pre-n"></span><canvas data-spark="pre"></canvas></div>
+  <div class="tile"><span class="name">Tokens gesamt</span><span class="value" id="t-tok">–</span><span class="note" id="t-tok-n"></span><canvas data-spark="calls"></canvas></div>
+  <div class="tile"><span class="name">Whisper</span><span class="value" id="t-wh">–</span><span class="note" id="t-wh-n"></span><canvas data-spark="wh"></canvas></div>
+  <div class="tile"><span class="name">Vision</span><span class="value" id="t-vis">–</span><span class="note" id="t-vis-n"></span><canvas data-spark="vis"></canvas></div>
+  <div class="tile"><span class="name">Clips gerendert</span><span class="value" id="t-clips">–</span><span class="note" id="t-clips-n"></span><canvas data-spark="none"></canvas></div>
 </div>
 
 <h2>Hardware</h2>
 <div class="grid">
-  <div class="tile"><h4>GPU-Auslastung</h4><div class="big" id="busy">–</div><div class="small" id="busy-sub"></div><div class="bar"><i id="busy-bar"></i></div></div>
-  <div class="tile"><h4>GPU-Temperatur</h4><div class="big" id="tj">–</div><div class="small" id="tj-sub"></div></div>
-  <div class="tile"><h4>GPU-Leistung</h4><div class="big" id="pw">–</div><div class="small" id="pw-sub"></div><div class="bar"><i id="pw-bar"></i></div></div>
-  <div class="tile"><h4>VRAM</h4><div class="big" id="vram">–</div><div class="small" id="vram-sub"></div><div class="bar"><i id="vram-bar"></i></div></div>
-  <div class="tile"><h4>CPU</h4><div class="big" id="cpu">–</div><div class="small" id="cpu-sub"></div><div class="bar"><i id="cpu-bar"></i></div></div>
-  <div class="tile"><h4>RAM</h4><div class="big" id="ram">–</div><div class="small" id="ram-sub"></div><div class="bar"><i id="ram-bar"></i></div></div>
-  <div class="tile"><h4>Platte /</h4><div class="big" id="disk">–</div><div class="small" id="disk-sub"></div><div class="bar"><i id="disk-bar"></i></div></div>
-  <div class="tile"><h4>VOD-Daten</h4><div class="big" id="data">–</div><div class="small" id="data-sub"></div></div>
+  <div class="tile"><span class="name">GPU-Last</span><span class="value" id="t-busy">–<small>%</small></span><span class="note" id="t-busy-n"></span><canvas data-spark="busy"></canvas></div>
+  <div class="tile"><span class="name">Hotspot</span><span class="value" id="t-tj">–<small>°C</small></span><span class="note" id="t-tj-n"></span><canvas data-spark="tj"></canvas></div>
+  <div class="tile"><span class="name">Speichertemperatur</span><span class="value" id="t-tm">–<small>°C</small></span><span class="note" id="t-tm-n"></span><canvas data-spark="tm"></canvas></div>
+  <div class="tile"><span class="name">Leistung</span><span class="value" id="t-pw">–<small>W</small></span><span class="note" id="t-pw-n"></span><canvas data-spark="pw"></canvas></div>
+  <div class="tile"><span class="name">Grafikspeicher</span><span class="value" id="t-vram">–<small>GB</small></span><span class="note" id="t-vram-n"></span><canvas data-spark="vram"></canvas></div>
+  <div class="tile"><span class="name">Lüfter</span><span class="value" id="t-fan">–<small>rpm</small></span><span class="note" id="t-fan-n"></span><canvas data-spark="fan"></canvas></div>
+  <div class="tile"><span class="name">CPU-Last</span><span class="value" id="t-cpu">–<small>%</small></span><span class="note" id="t-cpu-n"></span><canvas data-spark="cpu"></canvas></div>
+  <div class="tile"><span class="name">CPU-Temperatur</span><span class="value" id="t-tc">–<small>°C</small></span><span class="note" id="t-tc-n"></span><canvas data-spark="tc"></canvas></div>
+  <div class="tile"><span class="name">Arbeitsspeicher</span><span class="value" id="t-ram">–<small>GB</small></span><span class="note" id="t-ram-n"></span><canvas data-spark="ram"></canvas></div>
+  <div class="tile"><span class="name">Systemplatte</span><span class="value" id="t-disk">–<small>GB frei</small></span><span class="note" id="t-disk-n"></span><canvas data-spark="none"></canvas></div>
+  <div class="tile"><span class="name">VOD-Daten</span><span class="value" id="t-data">–<small>GB</small></span><span class="note" id="t-data-n"></span><canvas data-spark="none"></canvas></div>
 </div>
 
-<h2>Verlauf (10 min)</h2>
-<div class="chart"><h4><span style="color:#73bcf7">GPU %</span><span style="color:#f0ab00">Hotspot °C</span><span style="color:#c9190b">VRAM °C</span><span style="color:#3e8635">CPU °C</span><span style="color:#a18fff">CPU Last %</span></h4><canvas id="c1"></canvas></div>
-<div class="chart"><h4><span style="color:#73bcf7">Leistung W</span><span style="color:#a18fff">Lüfter rpm/10</span><span style="color:#3e8635">VRAM GB×10</span></h4><canvas id="c2"></canvas></div>
-<div class="chart"><h4><span style="color:#73bcf7">Generierung tok/s (letzter Call)</span><span style="color:#f0ab00">Prefill tok/s ÷ 10</span><span style="color:#3e8635">Whisper Faktor ×</span></h4><canvas id="c3"></canvas></div>
+<h2>Verlauf der letzten 10 Minuten</h2>
+<div class="chart">
+  <header><b>Auslastung und Temperaturen</b>
+    <span class="legend"><span><i style="background:var(--blue)"></i>GPU %</span><span><i style="background:var(--orange)"></i>Hotspot °C</span><span><i style="background:var(--red)"></i>Speicher °C</span><span><i style="background:var(--green)"></i>CPU °C</span><span><i style="background:var(--purple)"></i>CPU %</span></span></header>
+  <canvas id="c1"></canvas>
+</div>
+<div class="chart" style="margin-top:12px">
+  <header><b>Modelltempo</b>
+    <span class="legend"><span><i style="background:var(--blue)"></i>Generierung tok/s</span><span><i style="background:var(--orange)"></i>Prefill tok/s ÷ 10</span><span><i style="background:var(--green)"></i>Whisper × Echtzeit</span></span></header>
+  <canvas id="c3"></canvas>
+</div>
 
-<h2>Tokens je Modell (laufender Job)</h2>
-<table><thead><tr><th>Modell</th><th>Calls</th><th>Tokens rein</th><th>Tokens raus</th></tr></thead><tbody id="models"><tr><td colspan="4" class="small">–</td></tr></tbody></table>
+<h2>Tokens je Modell im laufenden Job</h2>
+<table><thead><tr><th>Modell</th><th class="num">Aufrufe</th><th class="num">Tokens rein</th><th class="num">Tokens raus</th></tr></thead><tbody id="models"><tr><td colspan="4" style="color:var(--mut)">Noch keine Modellaufrufe</td></tr></tbody></table>
 
 <script>
 (function () {
   const $ = (i) => document.getElementById(i);
   const DATA = "/opt/twitch-generator/data";
-  const HIST = 300;            // 300 × 2 s = 10 min
-  const H = { busy: [], tj: [], tm: [], tc: [], cpu: [], pw: [], fan: [], vram: [], gen: [], pre: [], wh: [] };
-  const STAGES = ["download", "extract", "signals", "analyze", "refine", "render", "upload", "done"];
-  let dev = null, hw = null, cpuhw = null, powerCap = null, vramTotal = null, ncpu = 1, lastCpu = null, tickN = 0, du = null, lastDf = null;
+  const HIST = 300;                                   // 300 × 2 s = 10 min
+  const H = {}; ["busy","tj","tm","tc","cpu","pw","fan","vram","ram","gen","pre","wh","vis","calls"].forEach(k => H[k] = []);
+  const STAGES = [["download","Download"],["extract","Extrahieren"],["signals","Signale"],["analyze","Transkript"],["refine","Auswahl"],["render","Schneiden"],["upload","Upload"]];
+  let dev = null, hw = null, cpuhw = null, powerCap = null, vramTotal = null, ncpu = 1, lastCpu = null, tickN = 0, gpuName = "";
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
   const read = (p) => cockpit.file(p).read().then(s => (s == null ? null : s.trim())).catch(() => null);
   const readJson = async (p) => { const s = await read(p); try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
   const num = async (p, div = 1) => { const v = await read(p); return v == null || v === "" ? null : Number(v) / div; };
   const cls = (t, w, b) => t == null ? "" : t >= b ? "bad" : t >= w ? "warn" : "ok";
+  const clsLow = (t, w, b) => t == null ? "" : t <= b ? "bad" : t <= w ? "warn" : "ok";
   const push = (k, v) => { H[k].push(v); if (H[k].length > HIST) H[k].shift(); };
-  const dur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h} h ${m} min` : m ? `${m} min ${s % 60} s` : `${s} s`; };
+  const dur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h} h ${m} min` : m ? `${m} min` : `${s} s`; };
   const k = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + " M" : n >= 1e3 ? (n / 1e3).toFixed(1) + " k" : String(n);
-  const gb = (b) => (b / 1e9).toFixed(1) + " GB";
+  const f1 = (n) => n == null ? "–" : Number(n).toFixed(1);
+  const f0 = (n) => n == null ? "–" : Math.round(n);
+  const val = (id, v, c) => { const el = $(id); const small = el.querySelector("small"); el.innerHTML = `<span class="${c || ""}">${v}</span>`; if (small) el.appendChild(small); };
+  const note = (id, t) => { $(id).innerHTML = t; };
 
   async function discover() {
     const out = await cockpit.spawn(["sh", "-c",
       "for d in /sys/class/drm/card*/device; do [ -f $d/gpu_busy_percent ] && echo $d && ls -d $d/hwmon/hwmon* 2>/dev/null | head -1; done; " +
-      "for h in /sys/class/hwmon/hwmon*; do n=$(cat $h/name 2>/dev/null); case $n in k10temp|zenpower|coretemp) echo CPU:$h;; esac; done; nproc | sed s/^/NCPU:/"], { err: "ignore" });
+      "for h in /sys/class/hwmon/hwmon*; do n=$(cat $h/name 2>/dev/null); case $n in k10temp|zenpower|coretemp) echo CPU:$h;; esac; done; nproc | sed s/^/NCPU:/; " +
+      "lspci -d ::0300 2>/dev/null | sed -n 's/.*\\[\\(Radeon[^]]*\\)\\].*/GPU:\\1/p; s/.*VGA compatible controller: \\(.*\\)/GPU:\\1/p' | head -1"], { err: "ignore" });
     for (const line of out.trim().split("\n")) {
       if (line.startsWith("CPU:")) cpuhw = line.slice(4);
       else if (line.startsWith("NCPU:")) ncpu = +line.slice(5) || 1;
+      else if (line.startsWith("GPU:")) gpuName = line.slice(4);
       else if (line.includes("/hwmon/")) hw = line;
       else if (line.startsWith("/sys/")) dev = line;
     }
-    if (dev) {
-      powerCap = hw ? await num(hw + "/power1_cap", 1e6) : null;
-      vramTotal = await num(dev + "/mem_info_vram_total", 1e9);
-      $("dev").textContent = `${hw ? await read(hw + "/name") : "gpu"} · ${dev.replace("/device", "")} · ${ncpu} CPU-Threads · alle 2 s`;
-    } else $("dev").textContent = "keine amdgpu gefunden · " + ncpu + " CPU-Threads";
+    if (dev) { powerCap = hw ? await num(hw + "/power1_cap", 1e6) : null; vramTotal = await num(dev + "/mem_info_vram_total", 1e9); }
+    $("g-cap").textContent = gpuName || (dev ? "AMD-Grafikkarte" : "Keine Grafikkarte gefunden");
+    $("lead").innerHTML = `<b>${location.hostname}</b>, ${ncpu} CPU-Threads${vramTotal ? `, ${vramTotal.toFixed(0)} GB Grafikspeicher` : ""}. Werte alle 2 Sekunden aus /sys, Pipeline aus ${DATA}.<span id="err"></span>`;
   }
 
   async function cpuPct() {
@@ -107,61 +202,54 @@
     const idle = f[3] + (f[4] || 0), total = f.reduce((a, b) => a + b, 0);
     let pct = null;
     if (lastCpu) { const dt = total - lastCpu.total, di = idle - lastCpu.idle; pct = dt > 0 ? Math.round(100 * (1 - di / dt)) : null; }
-    lastCpu = { total, idle };
-    return pct;
+    lastCpu = { total, idle }; return pct;
+  }
+
+  function gauge(busy, tj) {
+    const r = 50, circ = 2 * Math.PI * r, p = Math.max(0, Math.min(100, busy || 0));
+    $("ring").setAttribute("stroke-dasharray", `${circ * p / 100} ${circ}`);
+    $("ring").style.stroke = css(p >= 90 ? "--blue" : "--blue");
+    $("g-val").textContent = busy == null ? "–" : `${busy}`;
+    const t = $("g-temp"); t.textContent = tj == null ? "" : `${Math.round(tj)} °C`; t.setAttribute("fill", css(tj == null ? "--mut" : tj >= 105 ? "--red" : tj >= 90 ? "--gold" : "--green"));
   }
 
   async function hardware() {
-    const [busy, used, te, tj, tm, pw, fan, sclk] = dev ? await Promise.all([
+    const [busy, used, te, tj, tm, pw, fan, sclk, mclk] = dev ? await Promise.all([
       num(dev + "/gpu_busy_percent"), num(dev + "/mem_info_vram_used", 1e9),
       hw ? num(hw + "/temp1_input", 1000) : null, hw ? num(hw + "/temp2_input", 1000) : null, hw ? num(hw + "/temp3_input", 1000) : null,
-      hw ? num(hw + "/power1_average", 1e6) : null, hw ? num(hw + "/fan1_input") : null, hw ? num(hw + "/freq1_input", 1e6) : null,
+      hw ? num(hw + "/power1_average", 1e6) : null, hw ? num(hw + "/fan1_input") : null, hw ? num(hw + "/freq1_input", 1e6) : null, hw ? num(hw + "/freq2_input", 1e6) : null,
     ]) : [];
     const tc = cpuhw ? await num(cpuhw + "/temp1_input", 1000) : null;
-    const la = await read("/proc/loadavg");
-    const mi = await read("/proc/meminfo");
-    const cp = await cpuPct();
-
-    $("busy").textContent = busy == null ? "–" : `${busy} %`;
-    $("busy-sub").textContent = sclk ? `${Math.round(sclk)} MHz` : "";
-    $("busy-bar").style.width = (busy || 0) + "%";
-    $("tj").innerHTML = tj == null ? "–" : `<span class="${cls(tj, 90, 105)}">${tj.toFixed(0)} °C</span>`;
-    $("tj-sub").innerHTML = `Hotspot · Edge ${te == null ? "–" : te.toFixed(0)} °C · <span class="${cls(tm, 95, 105)}">VRAM ${tm == null ? "–" : tm.toFixed(0)} °C</span>`;
-    $("pw").textContent = pw == null ? "–" : `${pw.toFixed(0)} W`;
-    $("pw-sub").textContent = (powerCap ? `Limit ${powerCap.toFixed(0)} W` : "") + (fan != null ? ` · Lüfter ${fan} rpm` : "");
-    $("pw-bar").style.width = (pw && powerCap ? 100 * pw / powerCap : 0) + "%";
-    $("vram").textContent = used == null ? "–" : `${used.toFixed(1)} GB`;
-    $("vram-sub").textContent = vramTotal ? `von ${vramTotal.toFixed(1)} GB` : "";
-    $("vram-bar").style.width = (used && vramTotal ? 100 * used / vramTotal : 0) + "%";
-    $("cpu").innerHTML = (cp != null ? `${cp} %` : "–") + (tc != null ? ` · <span class="${cls(tc, 80, 90)}">${tc.toFixed(0)} °C</span>` : "");
-    $("cpu-sub").textContent = la ? `Load ${la.split(" ").slice(0, 3).join(" / ")} auf ${ncpu} Threads` : "";
-    $("cpu-bar").style.width = (cp || 0) + "%";
+    const la = await read("/proc/loadavg"); const mi = await read("/proc/meminfo"); const cp = await cpuPct();
+    gauge(busy, tj);
+    val("t-busy", f0(busy)); note("t-busy-n", sclk ? `Takt ${Math.round(sclk)} MHz, Speicher ${f0(mclk)} MHz` : "");
+    val("t-tj", f0(tj), cls(tj, 90, 105)); note("t-tj-n", te != null ? `Edge ${f0(te)} °C` : "");
+    val("t-tm", f0(tm), cls(tm, 95, 105)); note("t-tm-n", tm != null ? "GDDR6, unkritisch bis 105 °C" : "");
+    val("t-pw", f0(pw)); note("t-pw-n", powerCap ? `Limit ${f0(powerCap)} W` : "");
+    val("t-vram", f1(used)); note("t-vram-n", vramTotal ? `von ${vramTotal.toFixed(1)} GB belegt` : "");
+    val("t-fan", f0(fan)); note("t-fan-n", fan != null ? (fan === 0 ? "steht, passiv gekühlt" : "") : "kein Lüftersensor");
+    val("t-cpu", f0(cp)); note("t-cpu-n", la ? `Load ${la.split(" ").slice(0, 3).join(" / ")} auf ${ncpu} Threads` : "");
+    val("t-tc", f0(tc), cls(tc, 80, 90)); note("t-tc-n", tc != null ? "Tctl" : "kein Sensor");
     let ramUsed = null;
     if (mi) {
       const kv = {}; mi.split("\n").forEach(l => { const m = l.match(/^(\w+):\s+(\d+)/); if (m) kv[m[1]] = +m[2]; });
       const tot = kv.MemTotal / 1e6; ramUsed = (kv.MemTotal - kv.MemAvailable) / 1e6;
-      $("ram").textContent = `${ramUsed.toFixed(1)} GB`; $("ram-sub").textContent = `von ${tot.toFixed(1)} GB belegt`;
-      $("ram-bar").style.width = (100 * ramUsed / tot) + "%";
+      val("t-ram", f1(ramUsed)); note("t-ram-n", `von ${tot.toFixed(1)} GB belegt`);
     }
-    push("busy", busy); push("tj", tj); push("tm", tm); push("tc", tc); push("cpu", cp); push("pw", pw); push("fan", fan == null ? null : fan / 10); push("vram", used == null ? null : used * 10);
+    push("busy", busy); push("tj", tj); push("tm", tm); push("tc", tc); push("cpu", cp); push("pw", pw); push("fan", fan); push("vram", used); push("ram", ramUsed);
   }
 
   async function disk() {
-    if (tickN % 15 !== 0 && lastDf) return;       // every 30 s
+    if (tickN % 15 !== 0) return;                      // every 30 s
     try {
       const out = await cockpit.spawn(["df", "-B1", "--output=size,avail,target", "/"], { err: "ignore" });
-      const l = out.trim().split("\n").pop().trim().split(/\s+/);
-      const size = +l[0], avail = +l[1], used = size - avail;
-      $("disk").innerHTML = `<span class="${cls(100 * used / size, 85, 95)}">${gb(avail)} frei</span>`;
-      $("disk-sub").textContent = `${gb(used)} von ${gb(size)} belegt`;
-      $("disk-bar").style.width = (100 * used / size) + "%";
-      lastDf = true;
+      const l = out.trim().split("\n").pop().trim().split(/\s+/); const size = +l[0], avail = +l[1], used = size - avail;
+      val("t-disk", (avail / 1e9).toFixed(0), clsLow(100 * avail / size, 15, 5)); note("t-disk-n", `${(used / 1e9).toFixed(0)} von ${(size / 1e9).toFixed(0)} GB belegt`);
     } catch (e) {}
     try {
       const out = await cockpit.spawn(["sh", "-c", `du -sb ${DATA} 2>/dev/null | cut -f1; ls -d ${DATA}/*/ 2>/dev/null | wc -l; ls ${DATA}/*/clips/*.mp4 2>/dev/null | wc -l`], { err: "ignore" });
       const [bytes, vods, clips] = out.trim().split("\n");
-      $("data").textContent = gb(+bytes || 0);
-      $("data-sub").textContent = `${vods} VODs · ${clips} Clips · ${DATA}`;
+      val("t-data", ((+bytes || 0) / 1e9).toFixed(1)); note("t-data-n", `${vods} VODs, ${clips} fertige Clips`);
     } catch (e) {}
   }
 
@@ -171,88 +259,98 @@
     jobs = jobs || [];
     const active = jobs.filter(j => j.status === "running" || j.status === "queued");
     const job = active[active.length - 1] || jobs[jobs.length - 1];
-    if (!job) { $("job").textContent = "noch kein Job"; return; }
+    if (!job) { $("j-title").textContent = "Noch kein Job gestartet"; $("j-status").textContent = "bereit"; return; }
     const vid = (String(job.vod).match(/(\d{6,})/) || [])[1];
-    const info = vid ? await readJson(`${DATA}/${vid}/info.json`) : null;
-    const m = vid ? await readJson(`${DATA}/${vid}/metrics.json`) : null;
-    const run = vid ? await readJson(`${DATA}/${vid}/run.json`) : null;
-    const now = Date.now() / 1000;
-    const stClass = job.status === "running" ? "warn" : job.status === "done" ? "ok" : job.status === "queued" ? "" : "bad";
-    $("job").innerHTML = `Job <b>${job.id}</b> · <span class="${stClass}">${job.status}</span> · ${info ? `${info.streamer} — ${info.title}` : job.vod} · <a href="http://${location.hostname}:9443/jobs/${job.id}" target="_blank">Job-Seite</a>`;
-    if (!m) { $("stages").innerHTML = ""; return; }
-    const cur = m.stage;
-    $("stages").innerHTML = STAGES.map(s => { const st = m.stages && m.stages[s]; const c = s === cur ? "now" : (st && st.end) ? "done" : "";
-      const d = st ? (st.end ? dur(st.end - st.start) : dur(now - st.start)) : ""; return `<span class="stage ${c}">${s}${d ? " · " + d : ""}</span>`; }).join("");
-    const running = job.status === "running";
-    const elapsed = (running ? now : (m.updated || now)) - (m.started || now);
-    $("p-stage").textContent = (cur || "–");
-    let pct = 0, eta = "";
-    if (run && run.eta_seconds) { const left = Math.max(0, run.eta_seconds - (now - run.started)); pct = Math.min(99, 100 * (now - run.started) / run.eta_seconds); eta = running ? `ETA ≈ ${dur(left)} (gelernte Schätzung)` : ""; }
-    if (cur === "done" || !running) { pct = cur === "done" ? 100 : pct; }
-    $("p-eta").textContent = eta; $("p-bar").style.width = pct + "%";
-    const vodS = run ? run.vod_seconds : null;
-    $("p-time").textContent = vodS ? dur(vodS) : "–";
-    $("p-time-sub").textContent = `Laufzeit ${dur(elapsed)}` + (vodS ? ` · Faktor ${(elapsed / vodS).toFixed(2)}× der Stream-Länge` : "");
-    const l = m.llm || {};
-    $("p-tok").textContent = `${k(l.input_tokens || 0)} → ${k(l.output_tokens || 0)}`;
-    $("p-tok-sub").textContent = `${l.calls || 0} Modell-Calls` + (l.last ? ` · letzter: ${(l.last.model || "").replace("ollama/", "")} ${l.last.prompt_tokens}→${l.last.gen_tokens}, ${l.last.wall_s} s` : "");
-    const last = l.last;
+    const [info, m, run] = await Promise.all([vid ? readJson(`${DATA}/${vid}/info.json`) : null, vid ? readJson(`${DATA}/${vid}/metrics.json`) : null, vid ? readJson(`${DATA}/${vid}/run.json`) : null]);
+    const now = Date.now() / 1000, running = job.status === "running";
+    $("j-title").innerHTML = (info ? `${info.streamer}: ${info.title}` : job.vod) + ` <a href="http://${location.hostname}:9443/jobs/${job.id}" target="_blank" style="font-weight:400;font-size:13px;margin-left:8px">Job ${job.id}</a>`;
+    const st = $("j-status"); st.className = "status " + job.status;
+    st.textContent = { running: "läuft", queued: "wartet", done: "fertig", error: "Fehler", interrupted: "unterbrochen", cancelled: "abgebrochen" }[job.status] || job.status;
+    if (!m) { $("timeline").innerHTML = ""; return; }
+
+    const cur = m.stage, stages = m.stages || {};
+    const total = Math.max(1, (running ? now : (m.updated || now)) - (m.started || now));
+    $("timeline").innerHTML = STAGES.map(([key, label]) => {
+      const s = stages[key]; const end = s ? (s.end || (running ? now : m.updated)) : null;
+      const w = s ? Math.max(6, 100 * (end - s.start) / total) : 6;
+      const c = key === cur ? "now" : (s && s.end) ? "done" : "";
+      const title = s ? `${label}: ${dur(end - s.start)}` : `${label}: ausstehend`;
+      return `<div class="seg ${c}" style="flex-grow:${w.toFixed(1)}" title="${title}"><span>${label}${s ? " " + dur(end - s.start) : ""}</span></div>`;
+    }).join("");
+    const vodS = run ? run.vod_seconds : null, elapsed = total;
+    $("f-vod").textContent = vodS ? dur(vodS) : "–";
+    $("f-elapsed").textContent = dur(elapsed);
+    let eta = "–";
+    if (cur === "done") eta = "fertig"; else if (run && run.eta_seconds && running) eta = `≈ ${dur(Math.max(0, run.eta_seconds - (now - run.started)))}`;
+    $("f-eta").textContent = eta;
+    $("f-factor").textContent = vodS ? `${(elapsed / vodS).toFixed(2)} × Stream-Länge` : "–";
+
+    const l = m.llm || {}, last = l.last;
     if (last && last.gen_tok_s != null) {
-      $("p-toks").innerHTML = `<span class="${cls(-last.gen_tok_s, -15, -6)}">${last.gen_tok_s}</span>`;
-      $("p-toks-sub").textContent = `Ø ${l.gen_tok_s_avg ?? "–"} tok/s Generierung` + (last.prefill_tok_s ? ` · Prefill ${last.prefill_tok_s} tok/s` : "") + " · GPU-Referenz ≥ 20";
-    } else { $("p-toks").textContent = "–"; $("p-toks-sub").textContent = "noch kein Modell-Call"; }
+      val("t-gen", f1(last.gen_tok_s), clsLow(last.gen_tok_s, 15, 6)); note("t-gen-n", `Ø ${f1(l.gen_tok_s_avg)} tok/s, zuletzt ${(last.model || "").replace("ollama/", "")}`);
+    } else { val("t-gen", "–"); note("t-gen-n", "noch kein Modellaufruf"); }
+    val("t-pre", last && last.prefill_tok_s ? f0(last.prefill_tok_s) : "–"); note("t-pre-n", last ? `letzter Prompt ${k(last.prompt_tokens)} Tokens in ${last.wall_s} s` : "");
+    val("t-tok", `${k(l.input_tokens || 0)} <small>rein</small> ${k(l.output_tokens || 0)} <small>raus</small>`); note("t-tok-n", `${l.calls || 0} Aufrufe${l.usd ? `, $${l.usd.toFixed(2)} API` : ", $0 lokal"}`);
     const w = m.whisper || {};
-    if (w.chunks_total) { $("p-wh").innerHTML = `${w.chunks_done}/${w.chunks_total}` + (w.factor != null ? ` · <span class="${cls(-w.factor, -10, -2)}">${w.factor}× RT</span>` : ""); $("p-wh-sub").textContent = `${w.backend || ""} ${w.model || ""}`; }
-    else { $("p-wh").textContent = "–"; $("p-wh-sub").textContent = w.backend ? `${w.backend} ${w.model}` : "Transkript aus Cache oder wartet"; }
+    if (w.chunks_total) { val("t-wh", `${w.chunks_done}/${w.chunks_total}`, ""); note("t-wh-n", w.factor != null ? `${w.factor} × Echtzeit, ${w.model || ""}` : `${w.backend || ""} ${w.model || ""}`); }
+    else { val("t-wh", "–"); note("t-wh-n", "Transkript aus dem Cache"); }
     const v = m.vision || {};
-    if (v.frames != null) { $("p-vis").textContent = `${v.scored ?? 0}/${v.frames}`; $("p-vis-sub").textContent = `Frames · ${v.hot ?? 0} heiß · ${v.triage_batches ?? "?"} Calls` + (v.bursts != null ? ` · ${v.confirmed}/${v.bursts} Bursts` : ""); }
-    else { $("p-vis").textContent = "–"; $("p-vis-sub").textContent = "läuft oder wartet"; }
+    if (v.frames != null) { val("t-vis", `${v.scored ?? 0}/${v.frames}`); note("t-vis-n", `Frames bewertet, ${v.hot ?? 0} auffällig` + (v.bursts != null ? `, ${v.confirmed}/${v.bursts} Bursts bestätigt` : "")); }
+    else { val("t-vis", running && cur === "signals" ? "läuft" : "–"); note("t-vis-n", running && cur === "signals" ? "Triage in Arbeit" : ""); }
     const r = m.render || {};
-    $("p-clips").textContent = r.total ? `${r.done}/${r.total}` : "–";
-    $("p-clips-sub").textContent = `$${(l.usd || 0).toFixed(2)} API-Kosten` + (vid ? ` · VOD ${vid}` : "");
-    if (tickN % 5 === 0) {           // every 10 s
-      push("gen", last ? last.gen_tok_s : null); push("pre", last && last.prefill_tok_s ? last.prefill_tok_s / 10 : null); push("wh", w.factor ?? null);
-    }
-    const tb = $("models"); const bm = l.by_model || {};
-    tb.innerHTML = Object.keys(bm).length ? Object.entries(bm).map(([n, x]) => `<tr><td>${n}</td><td>${x.calls}</td><td>${k(x.input_tokens)}</td><td>${k(x.output_tokens)}</td></tr>`).join("") : `<tr><td colspan="4" class="small">–</td></tr>`;
+    val("t-clips", r.total ? `${r.done}/${r.total}` : "–"); note("t-clips-n", r.total ? "" : "noch nicht geschnitten");
+    if (tickN % 5 === 0) { push("gen", last ? last.gen_tok_s : null); push("pre", last && last.prefill_tok_s ? last.prefill_tok_s / 10 : null); push("wh", w.factor ?? null); push("vis", v.scored ?? null); push("calls", l.calls ?? null); }
+    const bm = l.by_model || {};
+    $("models").innerHTML = Object.keys(bm).length
+      ? Object.entries(bm).map(([n, x]) => `<tr><td>${n.replace("ollama/", "")}</td><td class="num">${x.calls}</td><td class="num">${k(x.input_tokens)}</td><td class="num">${k(x.output_tokens)}</td></tr>`).join("")
+      : `<tr><td colspan="4" style="color:var(--mut)">Noch keine Modellaufrufe</td></tr>`;
   }
 
   async function ollama() {
     try {
-      const txt = await cockpit.http(11434).get("/api/ps");
-      const d = JSON.parse(txt); const g = (d.models || [])[0];
+      const d = JSON.parse(await cockpit.http(11434).get("/api/ps")); const g = (d.models || [])[0];
       if (g) { const pct = g.size ? Math.round(100 * (g.size_vram || 0) / g.size) : null;
-        $("p-ol").innerHTML = `${g.name} · <span class="${cls(-(pct ?? 0), -99, -60)}">${pct ?? "?"} % GPU</span>`;
-        $("p-ol-sub").textContent = `${(g.size_vram / 1e9).toFixed(1)} GB VRAM · Kontext ${g.context_length ?? "?"}` + (d.models.length > 1 ? ` · +${d.models.length - 1}` : ""); }
-      else { $("p-ol").textContent = "leer"; $("p-ol-sub").textContent = "kein Modell geladen"; }
-    } catch (e) { $("p-ol").textContent = "–"; $("p-ol-sub").textContent = "Ollama :11434 nicht erreichbar"; }
+        $("f-model").innerHTML = `${g.name} <span class="${clsLow(pct, 99, 60)}" style="font-weight:500;font-size:13px">${pct}% im VRAM</span>`;
+      } else $("f-model").textContent = "keins geladen";
+    } catch (e) { $("f-model").textContent = "Ollama nicht erreichbar"; }
   }
 
-  function draw(cv, series, lo, hi) {
-    const dpr = window.devicePixelRatio || 1; const W = cv.width = cv.clientWidth * dpr, Hh = cv.height = 130 * dpr;
+  function spark(cv, data, color, lo, hi) {
+    const dpr = window.devicePixelRatio || 1, W = cv.width = cv.clientWidth * dpr, Hh = cv.height = cv.clientHeight * dpr;
     const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, W, Hh);
-    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--line"); ctx.lineWidth = 1;
-    for (const f of [0.25, 0.5, 0.75]) { ctx.beginPath(); ctx.moveTo(0, Hh * f); ctx.lineTo(W, Hh * f); ctx.stroke(); }
+    const vals = data.filter(v => v != null); if (!vals.length) return;
+    if (lo == null) lo = Math.min(...vals); if (hi == null) hi = Math.max(...vals); if (hi - lo < 1e-9) { hi = lo + 1; lo = lo - 1; }
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5 * dpr; ctx.lineJoin = "round"; ctx.beginPath(); let started = false;
+    data.forEach((v, i) => { if (v == null) { started = false; return; } const x = W * i / (HIST - 1), y = Hh - 2 * dpr - (Hh - 4 * dpr) * (v - lo) / (hi - lo); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); });
+    ctx.stroke();
+    const grad = ctx.createLinearGradient(0, 0, 0, Hh); grad.addColorStop(0, color + "33"); grad.addColorStop(1, color + "00");
+    ctx.lineTo(W * (data.length - 1) / (HIST - 1), Hh); ctx.lineTo(W * data.findIndex(v => v != null) / (HIST - 1), Hh); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  }
+  function chart(cv, series, lo, hi, unitRight) {
+    const dpr = window.devicePixelRatio || 1, W = cv.width = cv.clientWidth * dpr, Hh = cv.height = cv.clientHeight * dpr, pad = 28 * dpr;
+    const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, W, Hh);
+    ctx.font = `${11 * dpr}px RedHatText, system-ui, sans-serif`; ctx.fillStyle = css("--mut"); ctx.strokeStyle = css("--track"); ctx.lineWidth = 1;
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) { const y = Hh - 4 * dpr - (Hh - 8 * dpr) * f; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W, y); ctx.stroke(); ctx.fillText(String(Math.round(lo + (hi - lo) * f)), 0, y + 4 * dpr); }
     for (const [data, color] of series) {
-      ctx.strokeStyle = color; ctx.lineWidth = 2 * dpr; ctx.beginPath(); let started = false;
-      data.forEach((v, i) => { if (v == null) { started = false; return; }
-        const x = W * i / (HIST - 1), y = Hh - Hh * (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo);
-        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); });
+      ctx.strokeStyle = color; ctx.lineWidth = 2 * dpr; ctx.lineJoin = "round"; ctx.beginPath(); let started = false;
+      data.forEach((v, i) => { if (v == null) { started = false; return; } const x = pad + (W - pad) * i / (HIST - 1), y = Hh - 4 * dpr - (Hh - 8 * dpr) * (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); });
       ctx.stroke();
     }
+  }
+  const SPARK = { busy: ["--blue", 0, 100], tj: ["--orange", 30, 110], tm: ["--red", 30, 110], tc: ["--green", 30, 100], cpu: ["--purple", 0, 100], pw: ["--blue", 0, null], fan: ["--purple", 0, null], vram: ["--blue", 0, null], ram: ["--blue", 0, null], gen: ["--blue", 0, null], pre: ["--orange", 0, null], wh: ["--green", 0, null], vis: ["--blue", 0, null], calls: ["--blue", 0, null] };
+  function drawAll() {
+    document.querySelectorAll("canvas[data-spark]").forEach(cv => { const key = cv.dataset.spark; if (!SPARK[key]) return; const [c, lo, hi] = SPARK[key]; spark(cv, H[key], css(c), lo, hi == null ? (key === "vram" ? vramTotal : key === "pw" ? powerCap : null) : hi); });
+    chart($("c1"), [[H.busy, css("--blue")], [H.tj, css("--orange")], [H.tm, css("--red")], [H.tc, css("--green")], [H.cpu, css("--purple")]], 0, 110);
+    chart($("c3"), [[H.gen, css("--blue")], [H.pre, css("--orange")], [H.wh, css("--green")]], 0, 100);
   }
 
   async function tick() {
     try {
       if (!dev && !cpuhw) await discover();
       await Promise.all([hardware(), pipeline(), ollama(), disk()]);
-      draw($("c1"), [[H.busy, "#73bcf7"], [H.tj, "#f0ab00"], [H.tm, "#c9190b"], [H.tc, "#3e8635"], [H.cpu, "#a18fff"]], 0, 110);
-      draw($("c2"), [[H.pw, "#73bcf7"], [H.fan, "#a18fff"], [H.vram, "#3e8635"]], 0, Math.max(powerCap || 300, 350));
-      draw($("c3"), [[H.gen, "#73bcf7"], [H.pre, "#f0ab00"], [H.wh, "#3e8635"]], 0, 120);
-      $("err").textContent = "";
-    } catch (e) { $("err").textContent = " Fehler: " + (e.message || e); }
-    tickN++;
-    setTimeout(tick, 2000);
+      drawAll(); $("err").textContent = "";
+    } catch (e) { $("err").textContent = ` Fehler: ${e.message || e}`; }
+    tickN++; setTimeout(tick, 2000);
   }
   tick();
 })();
