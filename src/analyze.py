@@ -105,7 +105,7 @@ def analyze(
     for i, chunk in enumerate(chunks):
         try:
             data = llm.structured(
-                role="text",
+                role="analyze",
                 model=model,
                 max_tokens=2048,
                 system=system,

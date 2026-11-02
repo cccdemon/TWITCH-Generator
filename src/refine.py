@@ -238,7 +238,7 @@ def refine(
 
     try:
         data = llm.structured(
-            role="text",
+            role="refine",
             model=model,
             max_tokens=4096,
             system=system,

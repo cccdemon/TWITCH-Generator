@@ -23,6 +23,8 @@ llm:
     timeout_seconds: 600           # per request
     think: false                   # reasoning off; reasoning-only models (gpt-oss) take low|medium|high
     think_budget_tokens: 8192      # extra num_predict for the reasoning when think is on
+    # Optional per-stage overrides (default: text_model / think):
+    #   analyze_model / analyze_think, refine_model / refine_think
 
 whisper:
   # faster-whisper    — in-process CTranslate2 (CPU here). Production default.

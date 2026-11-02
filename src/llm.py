@@ -106,6 +106,22 @@ def ollama_cfg(cfg: dict | None) -> dict:
     return o
 
 
+_TEXT_ROLES = ("text", "analyze", "refine")
+
+
+def _ollama_model(o: dict, role: str) -> str:
+    """vision → vision_model; analyze/refine → their own override or text_model."""
+    if role == "vision":
+        return str(o["vision_model"])
+    return str(o.get(f"{role}_model") or o["text_model"])
+
+
+def _ollama_think(o: dict, role: str):
+    """Per-role reasoning setting (analyze_think / refine_think), else the global think."""
+    v = o.get(f"{role}_think", o.get("think", False))
+    return False if v in (None, "false") else v
+
+
 def model_for(role: str, cfg: dict | None, claude_model: str) -> str:
     """Effective model name for `role` under the configured provider.
 
@@ -113,8 +129,7 @@ def model_for(role: str, cfg: dict | None, claude_model: str) -> str:
     model-dependent caches (vision_triage.json, vision.json) cleanly.
     """
     if provider(cfg) == PROVIDER_OLLAMA:
-        o = ollama_cfg(cfg)
-        return str(o["vision_model"] if role == "vision" else o["text_model"])
+        return _ollama_model(ollama_cfg(cfg), role)
     return claude_model
 
 
@@ -146,9 +161,10 @@ def describe(cfg: dict | None) -> str:
     wmodel = w.get("model", "small")
     if provider(cfg) == PROVIDER_OLLAMA:
         o = ollama_cfg(cfg)
-        return (f"llm=ollama text={o['text_model']} vision={o['vision_model']} "
-                f"num_ctx={o['num_ctx']['text']}/{o['num_ctx']['vision']} @ {o['base_url']} · "
-                f"whisper={backend} model={wmodel}")
+        return (f"llm=ollama analyze={_ollama_model(o, 'analyze')} (think={_ollama_think(o, 'analyze')}) "
+                f"refine={_ollama_model(o, 'refine')} (think={_ollama_think(o, 'refine')}) "
+                f"vision={o['vision_model']} num_ctx={o['num_ctx']['text']}/{o['num_ctx']['vision']} "
+                f"@ {o['base_url']} · whisper={backend} model={wmodel}")
     a = cfg.get("analyze") or {}
     v = cfg.get("vision") or {}
     r = cfg.get("refine") or {}
@@ -175,15 +191,17 @@ def structured(
 ) -> dict:
     """One structured model call; returns the parsed object (a dict), or raises.
 
-    role             "text" | "vision" — selects the Ollama model / num_ctx.
+    role             "vision" | "text" | "analyze" | "refine" — selects the Ollama
+                     model, reasoning setting and num_ctx (analyze/refine may
+                     override text_model via llm.ollama.analyze_model/refine_model).
     model            the Claude model name the calling stage configured; used by
                      the anthropic provider, ignored by ollama.
     tool_name/desc   anthropic tool definition (schema = its input_schema).
     meter            pricing.CostMeter; usage is added under the effective model
                      name (ollama models are prefixed "ollama/" → $0).
     """
-    if role not in ("text", "vision"):
-        raise ValueError(f"role must be 'text' or 'vision', got {role!r}")
+    if role not in _TEXT_ROLES and role != "vision":
+        raise ValueError(f"role must be one of vision/text/analyze/refine, got {role!r}")
     if provider(cfg) == PROVIDER_OLLAMA:
         return _ollama(role=role, system=system, content=content, schema=schema,
                        cfg=cfg, meter=meter, max_tokens=max_tokens, log=log)
@@ -283,8 +301,9 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
     import httpx
 
     o = ollama_cfg(cfg)
-    model = str(o["vision_model"] if role == "vision" else o["text_model"])
-    num_ctx = int(o["num_ctx"][role])
+    model = _ollama_model(o, role)
+    ctx_role = "vision" if role == "vision" else "text"
+    num_ctx = int(o["num_ctx"].get(role) or o["num_ctx"][ctx_role])
     timeout = float(o.get("timeout_seconds") or 600)
     url = str(o["base_url"]).rstrip("/") + "/api/chat"
 
@@ -298,14 +317,14 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
     # Qwen3). Reasoning-only models (gpt-oss) ignore `false`; for them set
     # llm.ollama.think to "low"|"medium"|"high" and the thinking budget is added
     # on top of max_tokens so the reasoning cannot starve the answer.
-    think = o.get("think", False)
+    think = _ollama_think(o, role)
     num_predict = int(max_tokens)
-    if think not in (False, None, "false"):
+    if think is not False:
         num_predict += int(o.get("think_budget_tokens", 8192))
     body: dict[str, Any] = {
         "model": model,
         "stream": False,
-        "think": think if think not in (None, "false") else False,
+        "think": think,
         "format": schema,
         "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": num_predict},
         "messages": messages,
@@ -361,7 +380,7 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
         msg_obj = data.get("message") or {}
         text = msg_obj.get("content") or ""
         thinking = msg_obj.get("thinking") or ""
-        if thinking and think in (False, None, "false"):
+        if thinking and think is False:
             _warn_thinking(model, len(thinking), len(text), log)
         if not text.strip():
             last_err = _EmptyAnswer(f"empty answer after {len(thinking)} chars of thinking")

@@ -17,9 +17,14 @@ llm:
     # candidates far better than qwen3:14b on 2026-11-02: it kept the confirmed fights
     # and dropped small talk. It cannot stop reasoning, so think + budget below.
     text_model: gpt-oss:20b
-    vision_model: qwen3-vl:8b-instruct   # triage, confirm, facecam. NOT qwen3-vl:8b: that tag is the thinking variant and ignores think:false
-    think: medium                  # false for qwen3; gpt-oss needs low|medium|high ("low" returned empty selections)
+    think: medium                  # gpt-oss needs low|medium|high ("low" returned empty selections)
     think_budget_tokens: 12000     # added to num_predict so the reasoning cannot starve the JSON answer
+    # analyze is only the candidate pass (36 chunks on a 3 h VOD, scores get rank-calibrated
+    # anyway): gpt-oss spent 80-100 s and up to 50k chars of reasoning per chunk there, so it
+    # runs on qwen3:14b without reasoning (~10 s/chunk). refine keeps gpt-oss for the judgement.
+    analyze_model: qwen3:14b
+    analyze_think: false
+    vision_model: qwen3-vl:8b-instruct   # triage, confirm, facecam. NOT qwen3-vl:8b: that tag is the thinking variant and ignores think:false
     num_ctx:                       # refine prompts reach ~25k tokens; needs OLLAMA_FLASH_ATTENTION + q8 KV (compose)
       text: 32768
       vision: 32768                # one 640px frame ≈ 1100 tokens on qwen3-vl → 16 frames/call ≈ 17.5k (measured 2026-11-02)
