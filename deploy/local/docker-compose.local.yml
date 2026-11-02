@@ -52,6 +52,10 @@ services:
       OLLAMA_KV_CACHE_TYPE: "${OLLAMA_KV_CACHE_TYPE:-q8_0}"
     volumes:
       - ollama:/root/.ollama
+    # Ollama API on the LAN (VS Code assistants, curl). No auth — LAN only, never
+    # port-forward this. Remove the ports block to keep it internal.
+    ports:
+      - "11434:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
