@@ -32,18 +32,8 @@ ist der Live-Kernel zu alt — Ubuntu 25.10 Live als Ersatz nehmen.
 ### 0.2 Speicherplatz für Docker
 
 Die Live-Session liegt im RAM. Modelle (≈ 17 GB) + Images (≈ 7 GB) passen da nicht
-rein. Du brauchst eine Platte für `/var/lib/docker`. Zwei Wege:
-
-**A) Externe SSD / zweiter USB-Stick (≥ 64 GB).** Egal welches Dateisystem, wird
-ext4 formatiert:
-
-```bash
-lsblk -o NAME,SIZE,FSTYPE,LABEL,MODEL,TRAN      # externe Platte identifizieren (TRAN=usb)
-sudo mkfs.ext4 -F /dev/sdX                     # X = externe Platte, ALLES DARAUF GEHT VERLOREN
-```
-
-**B) Platte 2 (die spätere Ubuntu-Platte).** Nur wenn die Daten dort schon
-gesichert sind — sie wird bei der Installation ohnehin gelöscht.
+rein. Docker braucht eine echte Platte. Wir nehmen **Platte 2** (leer, wird später
+ohnehin die Ubuntu-Platte).
 
 > **Platte 1 (Windows) nicht anfassen.** Beide Platten sind 256 GB. Unterscheiden:
 > ```bash
@@ -54,6 +44,7 @@ gesichert sind — sie wird bei der Installation ohnehin gelöscht.
 > done
 > ```
 > Die Platte, deren erste Partition `EFI/Microsoft` enthält, ist Windows. **Die andere** ist Platte 2.
+> Platte 2 ist leer, zeigt in `lsblk` also keine oder nur unformatierte Partitionen — zweites Erkennungsmerkmal.
 > ```bash
 > sudo wipefs -a /dev/nvmeXn1          # nur Platte 2!
 > sudo mkfs.ext4 -F /dev/nvmeXn1
