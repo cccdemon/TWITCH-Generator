@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import llm
+from . import llm, metrics
 from .llm import ImagePart, Part, TextPart
 from .models import VisionFrame
 from .signals import clusters
@@ -449,7 +449,12 @@ def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[Visi
             concurrency=concurrency, cfg=cfg, meter=meter,
         )
         _save_frames_cache(work / "vision_triage.json", t_params, tri)
-    log(f"  triage: {len(tri)} frames, {sum(1 for f in tri if f.visual_score >= triage_thr)} hot")
+    n_hot = sum(1 for f in tri if f.visual_score >= triage_thr)
+    log(f"  triage: {len(tri)} frames, {n_hot} hot")
+    mx = metrics.current()
+    if mx is not None:
+        mx.vision(frames=len(frames), triage_batches=-(-len(frames) // max(1, int(v.get("max_frames_per_call", 16)))),
+                  scored=len(tri), hot=n_hot)
 
     if not burst:
         _save_frames_cache(work / "vision.json", final_params, tri)
@@ -465,6 +470,8 @@ def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[Visi
         concurrency=concurrency, cfg=cfg, meter=meter,
     )
     log(f"  confirm: {len(peaks)} bursts, {len(confirmed)} scored")
+    if mx is not None:
+        mx.vision(bursts=len(peaks), confirmed=len(confirmed))
 
     final: list[VisionFrame] = []
     in_window: set[float] = set()

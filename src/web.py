@@ -14,6 +14,7 @@ import secrets as _secrets
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -466,6 +467,55 @@ def api_job_log(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
     if not job:
         raise HTTPException(404, "no such job")
     return JSONResponse({"status": job.status, "log": job.log, "error": job.error})
+
+
+def _ollama_ps(cfg: dict) -> dict | None:
+    """Loaded models on the Ollama server (name, VRAM, context) — None if unreachable/not ollama."""
+    from . import llm
+    try:
+        if llm.provider(cfg) != llm.PROVIDER_OLLAMA:
+            return None
+        base = str(llm.ollama_cfg(cfg)["base_url"]).rstrip("/")
+        import httpx
+        r = httpx.get(f"{base}/api/ps", timeout=1.5)
+        r.raise_for_status()
+        models = []
+        for m in r.json().get("models", []):
+            size = int(m.get("size") or 0)
+            vram = int(m.get("size_vram") or 0)
+            models.append({
+                "name": m.get("name"),
+                "size_gb": round(size / 1e9, 1),
+                "vram_gb": round(vram / 1e9, 1),
+                "gpu_pct": round(100 * vram / size) if size else None,
+                "context": m.get("context_length"),
+                "expires_at": m.get("expires_at"),
+            })
+        return {"models": models, "base_url": base}
+    except Exception:  # noqa: BLE001 — metrics are best-effort
+        return None
+
+
+@app.get("/api/jobs/{job_id}/metrics")
+def api_job_metrics(job_id: str, _: str = Depends(current_user)) -> JSONResponse:
+    """Live run metrics for the job page: metrics.json + run.json + Ollama /api/ps."""
+    from . import metrics
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, "no such job")
+    vid = _job_vod_id(job.vod)
+    out: dict = {"status": job.status, "vod_id": vid, "metrics": None, "run": None, "ollama": None, "now": time.time()}
+    if vid and _SAFE_NAME.match(vid):
+        out["metrics"] = metrics.load(data_dir() / vid)
+        out["run"] = timing.read_run(vid)
+        try:
+            cfg = load_config()
+        except Exception:  # noqa: BLE001
+            cfg = {}
+        if job.status == "running":
+            out["ollama"] = _ollama_ps(cfg)
+        out["provider"] = (cfg.get("llm") or {}).get("provider", "anthropic")
+    return JSONResponse(out)
 
 
 # --------------------------------------------------------------- clips ---

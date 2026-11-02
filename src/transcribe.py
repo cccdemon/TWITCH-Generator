@@ -19,9 +19,11 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable
 
+from . import metrics
 from .models import TranscriptSegment
 
 BACKEND_FASTER = "faster-whisper"
@@ -132,16 +134,29 @@ def transcribe(
             )
             return [(seg.start, seg.end, seg.text) for seg in segments]
 
+    m = metrics.current()
+    if m is not None:
+        m.whisper_start(backend=backend, model=model, chunks_total=total)
+
     out: list[TranscriptSegment] = []
     for i, chunk in enumerate(chunks):
         offset = i * chunk_seconds  # raw-PCM segments split exactly at segment_time
+        t0 = time.time()
+        last_end = 0.0
         for start, end, text in transcribe_chunk(chunk):
+            last_end = max(last_end, end)
             text = text.strip()
             if not text:
                 continue
             out.append(TranscriptSegment(start=round(start + offset, 2),
                                          end=round(end + offset, 2),
                                          text=text))
+        wall = time.time() - t0
+        # the last chunk is shorter than chunk_seconds; use the audio actually covered
+        audio_s = float(chunk_seconds) if i < total - 1 else max(last_end, 1.0)
+        log(f"  whisper: chunk {i + 1}/{total} {audio_s:.0f}s audio in {wall:.0f}s ({audio_s / wall if wall else 0:.1f}x realtime)")
+        if m is not None:
+            m.whisper_chunk(audio_s=audio_s, wall_s=wall, done=i + 1)
         if on_progress:
             on_progress(i + 1, total)
 

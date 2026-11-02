@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import metrics
 from .config import env
 
 PROVIDER_ANTHROPIC = "anthropic"
@@ -198,6 +199,7 @@ def _anthropic(*, model: str, system: str | None, content: list[Part], schema: d
     kwargs: dict[str, Any] = {}
     if system:
         kwargs["system"] = system
+    t0 = time.time()
     msg = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -208,6 +210,16 @@ def _anthropic(*, model: str, system: str | None, content: list[Part], schema: d
     )
     if meter is not None:
         meter.add(model, msg.usage)
+    m = metrics.current()
+    if m is not None:
+        u = msg.usage
+        m.llm_call(model=model,
+                   prompt_tokens=int(getattr(u, "input_tokens", 0) or 0)
+                   + int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                   + int(getattr(u, "cache_creation_input_tokens", 0) or 0),
+                   gen_tokens=int(getattr(u, "output_tokens", 0) or 0),
+                   wall_s=time.time() - t0,
+                   usd=getattr(meter, "usd", None) if meter is not None else None)
     for block in msg.content:
         if getattr(block, "type", None) == "tool_use" and isinstance(block.input, dict):
             return block.input
@@ -290,6 +302,13 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
         if meter is not None:
             meter.add(f"ollama/{model}", usage)
         _log_speed(data, model, wall, est, log)
+        m = metrics.current()
+        if m is not None:
+            m.llm_call(model=f"ollama/{model}", prompt_tokens=usage.input_tokens,
+                       gen_tokens=usage.output_tokens, wall_s=wall,
+                       prefill_s=(data.get("prompt_eval_duration") or 0) / 1e9 or None,
+                       gen_s=(data.get("eval_duration") or 0) / 1e9 or None,
+                       usd=getattr(meter, "usd", None) if meter is not None else None)
 
         text = (data.get("message") or {}).get("content") or ""
         try:

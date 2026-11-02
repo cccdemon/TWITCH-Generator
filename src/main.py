@@ -16,6 +16,7 @@ from . import chat as chat_stage
 from . import clip as clip_stage
 from . import extract as extract_stage
 from . import llm
+from . import metrics
 from . import pricing
 from . import refine as refine_stage
 from . import score as score_stage
@@ -51,6 +52,9 @@ def _finish(work: Path, t0: float, vod_seconds: float, meter: pricing.CostMeter)
     timing.record(vod_seconds, elapsed)
     pricing.record_cost(vod_seconds, meter.usd)
     meter.save(work / "cost.json")
+    m = metrics.current()
+    if m is not None:
+        m.stage("done")
     return elapsed
 
 
@@ -63,6 +67,8 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     console.rule("[bold]1/7 Twitch — resolve + download")
     info = twitch_stage.fetch_vod_info(vod_url)
     work = _vod_workdir(info.vod_id)
+    mx = metrics.start(work)
+    mx.stage("download")
     # Persist VOD metadata early so the web UI can label jobs/clips by stream.
     try:
         (work / "info.json").write_text(
@@ -93,9 +99,11 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         )
 
     console.rule("[bold]2/7 Extract — one decode pass (wav chunks, frames, loudness)")
+    mx.stage("extract")
     extract_stage.prepare(media, work, cfg, log=log)
 
     console.rule("[bold]3/7 Signals — Whisper ∥ chat ∥ audio ∥ vision")
+    mx.stage("signals")
     vcfg = cfg.get("vision", {})
     w = cfg.get("whisper", {})
 
@@ -165,6 +173,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         vision_frames = f_vision.result()
 
     console.rule("[bold]4/7 LLM — transcript candidates")
+    mx.stage("analyze")
     a = cfg.get("analyze", {})
     max_clips = int(a.get("max_clips", 10))
     factor = int(cfg.get("score", {}).get("candidate_factor", 3))
@@ -182,6 +191,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     log(f"{len(text_moments)} text candidates")
 
     console.rule("[bold]5/7 Fuse + refine")
+    mx.stage("refine")
     candidates = score_stage.fuse(text_moments, vision_frames, audio_sig, chat_sig, cfg)
     score_stage.save_moments(candidates, work / "candidates.json")
     log(f"{len(candidates)} fused candidates")
@@ -204,6 +214,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         return 1
 
     console.rule("[bold]6/7 FFmpeg — cut clips")
+    mx.stage("render")
     c = cfg.get("clip", {})
     if not c.get("auto_render", True):
         log(
@@ -223,6 +234,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         else:
             log("facecam not auto-detected — using config box")
     clips = []
+    mx.render(0, len(moments))
     for m in moments:
         cl = clip_stage.render_clip(
             media, m, segments, work / "clips",
@@ -236,6 +248,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             burn_subtitles=c.get("burn_subtitles", True),
         )
         clips.append(cl)
+        mx.render(len(clips), len(moments))
         log(f"  rendered {cl.path}")
 
     if no_upload:
@@ -248,6 +261,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         return 0
 
     console.rule("[bold]7/7 Upload")
+    mx.stage("upload")
     u = cfg.get("upload", {})
     platforms = u.get("platforms", ["youtube"])
     privacy = u.get("privacy", "private")

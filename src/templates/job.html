@@ -7,10 +7,23 @@
 <style>
   body { margin:0; font:15px/1.5 system-ui,sans-serif; background:#0e0e12; color:#e6e6ea; }
   header { padding:18px 24px; border-bottom:1px solid #2a2a35; display:flex; gap:14px; align-items:center; }
-  a { color:#9146ff; } main { max-width:980px; margin:0 auto; padding:24px; }
-  pre { background:#11111a; border:1px solid #2a2a35; border-radius:10px; padding:16px; overflow:auto; white-space:pre-wrap; max-height:70vh; }
+  a { color:#9146ff; } main { max-width:1100px; margin:0 auto; padding:24px; }
+  pre { background:#11111a; border:1px solid #2a2a35; border-radius:10px; padding:16px; overflow:auto; white-space:pre-wrap; max-height:60vh; }
   .st-done{color:#3ecf8e} .st-error{color:#ff5470} .st-running{color:#ffcc66} .st-queued{color:#9a9aa8}
   .muted{color:#9a9aa8}
+  .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:18px; }
+  .tile { background:#11111a; border:1px solid #2a2a35; border-radius:10px; padding:12px 14px; min-height:92px; }
+  .tile h4 { margin:0 0 6px; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:#9a9aa8; }
+  .big { font-size:22px; font-weight:600; line-height:1.2; }
+  .sub { font-size:13px; color:#9a9aa8; margin-top:4px; }
+  .ok{color:#3ecf8e} .warn{color:#ffcc66} .bad{color:#ff5470}
+  .stages { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 14px; }
+  .stage { padding:4px 10px; border-radius:999px; border:1px solid #2a2a35; font-size:12px; color:#9a9aa8; }
+  .stage.done { border-color:#3ecf8e55; color:#3ecf8e; }
+  .stage.now { border-color:#ffcc66; color:#ffcc66; }
+  .bar { height:6px; background:#1d1d27; border-radius:3px; overflow:hidden; margin-top:8px; }
+  .bar > i { display:block; height:100%; background:#9146ff; width:0; transition:width .4s; }
+  #mwrap[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -19,23 +32,116 @@
   <span class="muted">{{ job.title or job.vod }}</span>
 </header>
 <main>
+  <div id="mwrap" hidden>
+    <div class="stages" id="stages"></div>
+    <div class="metrics">
+      <div class="tile"><h4>Progress</h4><div class="big" id="m-stage">–</div><div class="sub" id="m-eta"></div><div class="bar"><i id="m-bar"></i></div></div>
+      <div class="tile"><h4>LLM</h4><div class="big" id="m-llm">–</div><div class="sub" id="m-llm-sub"></div></div>
+      <div class="tile"><h4>Speed</h4><div class="big" id="m-toks">–</div><div class="sub" id="m-toks-sub"></div></div>
+      <div class="tile"><h4>Whisper</h4><div class="big" id="m-wh">–</div><div class="sub" id="m-wh-sub"></div></div>
+      <div class="tile"><h4>Vision</h4><div class="big" id="m-vis">–</div><div class="sub" id="m-vis-sub"></div></div>
+      <div class="tile"><h4>GPU · Ollama</h4><div class="big" id="m-gpu">–</div><div class="sub" id="m-gpu-sub"></div></div>
+      <div class="tile"><h4>Cost</h4><div class="big" id="m-cost">–</div><div class="sub" id="m-cost-sub"></div></div>
+    </div>
+  </div>
   <pre id="log">{{ job.log }}</pre>
 </main>
 <script>
 const id = "{{ job.id }}";
 const BASE = "{{ base }}";
+const STAGES = ["download","extract","signals","analyze","refine","render","upload","done"];
+const $ = (i) => document.getElementById(i);
+const fmtDur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60); return h ? `${h}h ${m}m` : m ? `${m}m ${s%60}s` : `${s}s`; };
+const fmtK = (n) => n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
+
 async function poll() {
   try {
     const r = await fetch(`${BASE}/api/jobs/${id}/log`); if (!r.ok) return;
     const d = await r.json();
-    const log = document.getElementById('log');
+    const log = $('log');
     log.textContent = d.log + (d.error ? `\nERROR: ${d.error}` : '');
-    const st = document.getElementById('status');
+    const st = $('status');
     st.textContent = d.status; st.className = 'st-' + d.status;
     if (d.status === 'running' || d.status === 'queued') setTimeout(poll, 2000);
   } catch (e) {}
 }
+
+function renderMetrics(d) {
+  const m = d.metrics; if (!m) return;
+  $('mwrap').hidden = false;
+  // stages
+  const cur = m.stage;
+  $('stages').innerHTML = STAGES.map(s => {
+    const st = m.stages && m.stages[s];
+    const cls = s === cur ? 'now' : (st && st.end) ? 'done' : '';
+    const dur = st ? (st.end ? fmtDur(st.end - st.start) : fmtDur(d.now - st.start)) : '';
+    return `<span class="stage ${cls}">${s}${dur ? ' · ' + dur : ''}</span>`;
+  }).join('');
+  // progress / eta
+  const elapsed = d.now - (m.started || d.now);
+  $('m-stage').textContent = (cur || '–') + ' · ' + fmtDur(elapsed);
+  let pct = 0, eta = '';
+  if (d.run && d.run.eta_seconds) {
+    const left = Math.max(0, d.run.eta_seconds - (d.now - d.run.started));
+    pct = Math.min(99, 100 * (d.now - d.run.started) / d.run.eta_seconds);
+    eta = `ETA ~${fmtDur(left)} · VOD ${fmtDur(d.run.vod_seconds)} · factor ${(elapsed / d.run.vod_seconds).toFixed(2)}×`;
+  }
+  if (cur === 'done') { pct = 100; eta = `finished in ${fmtDur(elapsed)}`; }
+  $('m-eta').textContent = eta; $('m-bar').style.width = pct + '%';
+  // llm
+  const l = m.llm || {};
+  $('m-llm').textContent = `${l.calls || 0} calls`;
+  $('m-llm-sub').textContent = `${fmtK(l.input_tokens || 0)} in · ${fmtK(l.output_tokens || 0)} out` +
+    (l.last ? ` · last: ${l.last.model.replace('ollama/','')} ${l.last.prompt_tokens}→${l.last.gen_tokens} tok, ${l.last.wall_s}s` : '');
+  // speed
+  const last = l.last;
+  if (last && last.gen_tok_s != null) {
+    const v = last.gen_tok_s;
+    const cls = d.provider === 'ollama' ? (v >= 15 ? 'ok' : v >= 6 ? 'warn' : 'bad') : '';
+    $('m-toks').innerHTML = `<span class="${cls}">${v} tok/s</span>`;
+    $('m-toks-sub').textContent = `avg ${l.gen_tok_s_avg ?? '–'} tok/s gen` + (last.prefill_tok_s ? ` · prefill ${last.prefill_tok_s} tok/s` : '') +
+      (d.provider === 'ollama' ? ' · GPU ref ≥ 20, CPU ≈ 3' : '');
+  } else { $('m-toks').textContent = '–'; $('m-toks-sub').textContent = 'no model call yet'; }
+  // whisper
+  const w = m.whisper || {};
+  if (w.chunks_total) {
+    const f = w.factor;
+    const cls = f == null ? '' : f >= 10 ? 'ok' : f >= 2 ? 'warn' : 'bad';
+    $('m-wh').innerHTML = `${w.chunks_done}/${w.chunks_total} chunks` + (f != null ? ` · <span class="${cls}">${f}× RT</span>` : '');
+    $('m-wh-sub').textContent = `${w.backend || ''} ${w.model || ''}` + (w.last ? ` · last ${w.last.audio_s}s in ${w.last.wall_s}s` : '');
+  } else { $('m-wh').textContent = '–'; $('m-wh-sub').textContent = w.backend ? `${w.backend} ${w.model}` : 'waiting'; }
+  // vision
+  const v = m.vision || {};
+  if (v.frames != null) {
+    $('m-vis').textContent = `${v.scored ?? 0}/${v.frames} frames`;
+    $('m-vis-sub').textContent = `${v.hot ?? 0} hot · ${v.triage_batches ?? '?'} triage calls` + (v.bursts != null ? ` · ${v.confirmed}/${v.bursts} bursts confirmed` : '');
+  } else { $('m-vis').textContent = '–'; $('m-vis-sub').textContent = 'waiting'; }
+  // gpu
+  const o = d.ollama;
+  if (o && o.models && o.models.length) {
+    const g = o.models[0];
+    const cls = g.gpu_pct >= 99 ? 'ok' : g.gpu_pct >= 60 ? 'warn' : 'bad';
+    $('m-gpu').innerHTML = `${g.name} · <span class="${cls}">${g.gpu_pct ?? '?'}% GPU</span>`;
+    $('m-gpu-sub').textContent = `${g.vram_gb} GB VRAM of ${g.size_gb} GB · ctx ${g.context ?? '?'}` + (o.models.length > 1 ? ` · +${o.models.length - 1} more` : '');
+  } else if (d.provider === 'ollama') { $('m-gpu').textContent = 'idle'; $('m-gpu-sub').textContent = 'no model loaded'; }
+  else { $('m-gpu').textContent = d.provider || '–'; $('m-gpu-sub').textContent = 'cloud provider'; }
+  // cost
+  $('m-cost').textContent = `$${(l.usd || 0).toFixed(l.usd ? 4 : 2)}`;
+  $('m-cost-sub').textContent = d.provider === 'ollama' ? 'local models, $0' : 'Anthropic API spend so far';
+}
+
+async function pollMetrics() {
+  let running = true;
+  try {
+    const r = await fetch(`${BASE}/api/jobs/${id}/metrics`); if (!r.ok) return;
+    const d = await r.json();
+    renderMetrics(d);
+    running = (d.status === 'running' || d.status === 'queued');
+  } catch (e) {}
+  if (running) setTimeout(pollMetrics, 3000);
+}
 poll();
+pollMetrics();
 </script>
 </body>
 </html>
