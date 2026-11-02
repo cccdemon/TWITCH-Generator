@@ -15,6 +15,7 @@ from . import audio as audio_stage
 from . import chat as chat_stage
 from . import clip as clip_stage
 from . import extract as extract_stage
+from . import llm
 from . import pricing
 from . import refine as refine_stage
 from . import score as score_stage
@@ -57,6 +58,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     t0 = time.time()
     meter = pricing.CostMeter()
     log = console.print
+    log(f"[cyan]backends:[/] {llm.describe(cfg)}")
 
     console.rule("[bold]1/7 Twitch — resolve + download")
     info = twitch_stage.fetch_vod_info(vod_url)
@@ -152,6 +154,10 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             chunk_seconds=w.get("chunk_seconds", 1800),
             beam_size=w.get("beam_size", 1),
             on_progress=_whisper_progress,
+            backend=w.get("backend", transcribe_stage.BACKEND_FASTER),
+            server_url=w.get("server_url"),
+            request_timeout=float(w.get("request_timeout_seconds", 3600)),
+            log=log,
         )
         log(f"  whisper: {len(segments)} segments")
         chat_sig = f_chat.result()
@@ -170,6 +176,8 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         min_clip_seconds=a.get("min_clip_seconds", 15),
         max_clip_seconds=a.get("max_clip_seconds", 60),
         meter=meter,
+        cfg=cfg,
+        log=log,
     ) if segments else []
     log(f"{len(text_moments)} text candidates")
 
@@ -181,7 +189,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     score_stage.save_moments(moments, work / "moments.json")
     meter.save(work / "cost.json")
     log(
-        f"[cyan]Claude cost ~${meter.usd:.4f}[/] "
+        f"[cyan]LLM cost ~${meter.usd:.4f}[/] "
         f"({meter.calls} calls, {meter.input_tokens + meter.cache_read_tokens + meter.cache_write_tokens} in / {meter.output_tokens} out tokens)"
     )
     log(f"{len(moments)} highlights")
@@ -207,7 +215,7 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
     facecam = c.get("facecam") or {}
     if c.get("vertical", True) and c.get("layout", "split") == "split" and c.get("facecam_auto", True):
         det = vision_stage.detect_facecam(
-            work, model=vcfg.get("model", "claude-sonnet-4-6"), meter=meter
+            work, model=vcfg.get("model", "claude-sonnet-4-6"), meter=meter, cfg=cfg
         )
         if det:
             facecam = det

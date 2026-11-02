@@ -6,7 +6,28 @@ download:
   # Skip re-download if VOD file already present in data dir.
   reuse_existing: true
 
+# Which backend answers the structured model calls (analyze, refine, vision, facecam).
+#   anthropic — Claude via API (needs ANTHROPIC_API_KEY); models come from the
+#               analyze/vision/refine sections below. Production default.
+#   ollama    — local Ollama server, no API key, $0. Models come from llm.ollama.*;
+#               the Claude names below are ignored. See deploy/local/.
+llm:
+  provider: anthropic
+  ollama:
+    base_url: http://ollama:11434
+    text_model: qwen3:14b          # analyze + refine
+    vision_model: qwen3-vl:8b      # triage, confirm, facecam
+    num_ctx:                       # context window per role; refine prompts reach ~25k tokens
+      text: 32768
+      vision: 8192
+    timeout_seconds: 600           # per request
+
 whisper:
+  # faster-whisper    — in-process CTranslate2 (CPU here). Production default.
+  # whispercpp-server — HTTP to a whisper.cpp whisper-server (GPU in deploy/local/);
+  #                     then `server_url` is required and device/compute_type/cpu_threads/beam_size are ignored.
+  backend: faster-whisper
+  server_url: http://whisper:8080
   # tiny|base|small|medium|large-v3 — smaller = much faster on CPU.
   # large-v3 on CPU takes hours; "small" is the sweet spot for highlight detection.
   model: "small"

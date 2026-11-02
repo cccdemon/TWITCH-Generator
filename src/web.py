@@ -314,6 +314,15 @@ def logout(request: Request) -> RedirectResponse:
 
 
 # ---------------------------------------------------------------- main views ---
+def _llm_provider() -> str:
+    """'anthropic' | 'ollama' from config.yaml; drives the API-key hint in Settings."""
+    try:
+        from . import llm
+        return llm.provider(load_config())
+    except Exception:  # noqa: BLE001 — a broken config must not take the UI down
+        return "anthropic"
+
+
 def _render(request: Request, vods=None, message: str | None = None) -> HTMLResponse:
     return _TEMPLATES.TemplateResponse(
         request,
@@ -322,6 +331,7 @@ def _render(request: Request, vods=None, message: str | None = None) -> HTMLResp
             "base": BASE,
             "user": request.session.get("user"),
             "settings": current_view(),
+            "llm_provider": _llm_provider(),
             "platforms": oauth.all_status(),
             "jobs": manager.list(),
             "vods": vods,

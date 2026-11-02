@@ -1,13 +1,31 @@
-"""Whisper stage: transcribe VOD audio to timestamped segments via faster-whisper."""
+"""Whisper stage: transcribe VOD audio to timestamped segments.
+
+Two backends, selected by `whisper.backend` in config.yaml:
+
+  faster-whisper      (default, prod) — in-process CTranslate2 on CPU/CUDA.
+  whispercpp-server   — HTTP to a whisper.cpp `whisper-server` (GPU via Vulkan in
+                        the local deployment). One `POST {server_url}/inference`
+                        per 30-min chunk, `response_format=verbose_json`
+                        (`segments[].start/end` in float seconds); `srt` is parsed
+                        as a fallback if the server answers with text.
+
+Chunking is shared: audio is split up front into N-second 16 kHz mono WAVs
+(bounded RAM for faster-whisper, bounded request size for the server) and each
+chunk's offset is added back. transcript.json has the same shape either way.
+"""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 
 from .models import TranscriptSegment
+
+BACKEND_FASTER = "faster-whisper"
+BACKEND_SERVER = "whispercpp-server"
 
 
 def chunks_ready(chunk_dir: Path, chunk_seconds: int) -> bool:
@@ -71,6 +89,10 @@ def transcribe(
     chunk_seconds: int = 1800,
     beam_size: int = 1,
     on_progress: Callable[[int, int], None] | None = None,
+    backend: str = BACKEND_FASTER,
+    server_url: str | None = None,
+    request_timeout: float = 3600.0,
+    log=print,
 ) -> list[TranscriptSegment]:
     """Transcribe to segments, chunk by chunk. Caches JSON to allow re-runs.
 
@@ -81,29 +103,45 @@ def transcribe(
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         return [TranscriptSegment(**s) for s in data]
 
+    if backend not in (BACKEND_FASTER, BACKEND_SERVER):
+        raise ValueError(f"whisper.backend must be '{BACKEND_FASTER}' or '{BACKEND_SERVER}', got {backend!r}")
+
     chunks = _split_audio_chunks(media_path, cache_path.parent, chunk_seconds)
     total = len(chunks)
     if on_progress:
         on_progress(0, total)
 
-    from faster_whisper import WhisperModel  # lazy: heavy import, keeps module light for extract.py
+    if backend == BACKEND_SERVER:
+        if not server_url:
+            raise ValueError("whisper.server_url is required for backend whispercpp-server")
+        log(f"  whisper: backend={backend} model={model} server={server_url}")
+        transcribe_chunk = _server_transcriber(server_url, language, request_timeout)
+    else:
+        log(f"  whisper: backend={backend} model={model} device={device}/{compute_type}")
+        from faster_whisper import WhisperModel  # lazy: heavy import, keeps module light for extract.py
 
-    wm = WhisperModel(model, device=device, compute_type=compute_type,
-                      cpu_threads=cpu_threads, num_workers=1)
+        wm = WhisperModel(model, device=device, compute_type=compute_type,
+                          cpu_threads=cpu_threads, num_workers=1)
+
+        def transcribe_chunk(chunk: Path) -> list[tuple[float, float, str]]:
+            segments, _info = wm.transcribe(
+                str(chunk),
+                language=language,
+                vad_filter=True,
+                beam_size=max(1, int(beam_size)),  # 1 = greedy, ~2-3x faster than 5
+            )
+            return [(seg.start, seg.end, seg.text) for seg in segments]
 
     out: list[TranscriptSegment] = []
     for i, chunk in enumerate(chunks):
         offset = i * chunk_seconds  # raw-PCM segments split exactly at segment_time
-        segments, _info = wm.transcribe(
-            str(chunk),
-            language=language,
-            vad_filter=True,
-            beam_size=max(1, int(beam_size)),  # 1 = greedy, ~2-3x faster than 5
-        )
-        for seg in segments:
-            out.append(TranscriptSegment(start=round(seg.start + offset, 2),
-                                         end=round(seg.end + offset, 2),
-                                         text=seg.text.strip()))
+        for start, end, text in transcribe_chunk(chunk):
+            text = text.strip()
+            if not text:
+                continue
+            out.append(TranscriptSegment(start=round(start + offset, 2),
+                                         end=round(end + offset, 2),
+                                         text=text))
         if on_progress:
             on_progress(i + 1, total)
 
@@ -111,4 +149,79 @@ def transcribe(
         json.dumps([s.__dict__ for s in out], ensure_ascii=False),
         encoding="utf-8",
     )
+    return out
+
+
+# ------------------------------------------------------------ whisper.cpp ----
+def _server_transcriber(server_url: str, language: str | None, timeout: float):
+    import httpx
+
+    url = server_url.rstrip("/") + "/inference"
+
+    def run(chunk: Path) -> list[tuple[float, float, str]]:
+        fields = {
+            "temperature": "0.0",
+            "response_format": "verbose_json",
+        }
+        if language:
+            fields["language"] = str(language)
+        with chunk.open("rb") as fh:
+            with httpx.Client(timeout=httpx.Timeout(timeout, connect=30.0)) as client:
+                resp = client.post(url, data=fields,
+                                   files={"file": (chunk.name, fh, "audio/wav")})
+        if resp.status_code != 200:
+            raise RuntimeError(f"whisper-server {resp.status_code}: {resp.text[:300]}")
+        return parse_server_response(resp.text)
+
+    return run
+
+
+def parse_server_response(body: str) -> list[tuple[float, float, str]]:
+    """verbose_json → (start, end, text) per segment; falls back to SRT text."""
+    stripped = body.lstrip()
+    if stripped.startswith("{"):
+        data = json.loads(stripped)
+        segs = data.get("segments")
+        if isinstance(segs, list):
+            out = []
+            for s in segs:
+                if not isinstance(s, dict):
+                    continue
+                try:
+                    out.append((float(s["start"]), float(s["end"]), str(s.get("text", ""))))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            return out
+        # plain {"text": ...} (response_format=json): no timestamps → one segment
+        text = str(data.get("text", "")).strip()
+        return [(0.0, 0.0, text)] if text else []
+    return parse_srt(body)
+
+
+_SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{3})")
+
+
+def _srt_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def parse_srt(body: str) -> list[tuple[float, float, str]]:
+    out: list[tuple[float, float, str]] = []
+    cur: tuple[float, float] | None = None
+    lines: list[str] = []
+    for raw in body.splitlines() + [""]:
+        line = raw.strip()
+        m = _SRT_TIME.match(line)
+        if m:
+            cur = (_srt_seconds(*m.groups()[:4]), _srt_seconds(*m.groups()[4:]))
+            lines = []
+            continue
+        if not line:
+            if cur is not None and lines:
+                out.append((cur[0], cur[1], " ".join(lines)))
+            cur, lines = None, []
+            continue
+        if cur is None:
+            continue  # the block index line
+        lines.append(line)
     return out

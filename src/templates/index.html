@@ -76,7 +76,8 @@
         {% for s in settings %}
         <div>
           <label>{{ s.label }}
-            {% if s.is_set %}<span class="badge set">set</span>{% else %}<span class="badge unset">empty</span>{% endif %}
+            {% if s.key == 'ANTHROPIC_API_KEY' and llm_provider == 'ollama' %}<span class="badge" title="config.yaml llm.provider is ollama — the pipeline runs on the local model and never calls Anthropic">nicht benötigt (provider: ollama)</span>
+            {% elif s.is_set %}<span class="badge set">set</span>{% else %}<span class="badge unset">empty</span>{% endif %}
           </label>
           {% if s.secret %}
             <input type="password" name="{{ s.key }}" placeholder="{{ '•••• (leave blank to keep)' if s.is_set else 'enter value' }}">

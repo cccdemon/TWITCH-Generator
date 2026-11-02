@@ -25,7 +25,12 @@ _CACHE_WRITE_MULT = 1.25     # writing to cache costs ~1.25x input
 _CACHE_READ_MULT = 0.1       # reading from cache costs ~0.1x input
 
 
+_LOCAL_PREFIX = "ollama/"     # local models (src/llm.py ollama provider) cost nothing
+
+
 def _rate(model: str) -> tuple[float, float]:
+    if model.startswith(_LOCAL_PREFIX):
+        return (0.0, 0.0)
     return _PRICES.get(model, _DEFAULT_RATE)
 
 

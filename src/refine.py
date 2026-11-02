@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import env
+from . import llm
+from .llm import TextPart
 from .models import Moment, TranscriptSegment
 
 _TOOL = {
@@ -52,6 +53,17 @@ _RUBRIC = (
     "  0.7-0.8  clearly clip-worthy, obvious payoff within the window\n"
     "  0.5-0.6  decent but needs context or the payoff is mild\n"
     "  <0.5     filler, setup without payoff, or the signals are noise — DROP IT\n"
+)
+
+
+# Appended to the system prompt for the ollama provider only (one-clip example).
+_FEW_SHOT = (
+    "Example of the expected output shape (values are illustrative, index refers to "
+    "the candidate number):\n"
+    '{"clips": [{"index": 4, "start": 3621.0, "end": 3645.5, "score": 0.82, '
+    '"category": "funny", "title": "Schiff explodiert beim Einparken", '
+    '"reason": "hook: calm landing talk; payoff: crash + chat erupts at 3640"}]}\n'
+    "Return an empty clips array if nothing clears 0.5."
 )
 
 
@@ -207,30 +219,31 @@ def refine(
         + _RUBRIC
         + "It is fine to return fewer clips, or none, if nothing clears 0.5."
     )
+    if llm.provider(cfg) == llm.PROVIDER_OLLAMA:
+        # Small local models follow the shape far more reliably with one worked example.
+        system += "\n" + _FEW_SHOT
 
-    from anthropic import Anthropic  # lazy: keeps this module importable without the SDK
-    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
     try:
-        msg = client.messages.create(
+        data = llm.structured(
+            role="text",
             model=model,
             max_tokens=4096,
             system=system,
-            tools=[_TOOL],
-            tool_choice={"type": "tool", "name": "finalize_clips"},
-            messages=[{"role": "user", "content": "\n".join(blocks)
-                       + "\n\nReturn the final selection via finalize_clips."}],
+            content=[TextPart("\n".join(blocks)
+                              + "\n\nReturn the final selection via finalize_clips.")],
+            schema=_TOOL["input_schema"],
+            tool_name=_TOOL["name"],
+            tool_description=_TOOL["description"],
+            cfg=cfg,
+            meter=meter,
+            log=log,
         )
     except Exception as e:  # noqa: BLE001 — degrade to the fused ranking
         log(f"[yellow]refine pass failed ({type(e).__name__}: {e}) — keeping fused ranking")
         return _fallback(candidates, segments, max_clips=max_clips, min_len=min_len,
                          max_len=max_len, tolerance=tolerance)
-    if meter is not None:
-        meter.add(model, msg.usage)
 
-    chosen: list[dict[str, Any]] = []
-    for block in msg.content:
-        if getattr(block, "type", None) == "tool_use":
-            chosen.extend(block.input.get("clips", []))
+    chosen: list[dict[str, Any]] = [c for c in (data.get("clips") or []) if isinstance(c, dict)]
     final = _apply(chosen, candidates, segments, categories,
                    min_len=min_len, max_len=max_len, tolerance=tolerance)
     return final[:max_clips]

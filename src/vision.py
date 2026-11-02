@@ -1,4 +1,4 @@
-"""Vision stage: two-tier frame scoring with Claude Vision.
+"""Vision stage: two-tier frame scoring with a vision model.
 
 Star Citizen highlights are often visual (explosions, PvP, ship damage, landings,
 bugs) with no telling speech. This stage gives the fusion step a video signal
@@ -11,11 +11,13 @@ as a short BURST of 3 frames ~1.5s apart around the peak, so the model sees
 motion and escalation instead of a single still. Confirmed scores replace the
 triage scores inside the window; unconfirmed frames are discounted.
 
+All model calls go through src/llm.py (provider anthropic | ollama). Under
+ollama both tiers and the facecam detector use `llm.ollama.vision_model`.
+
 Caches: frames/ (+meta.json), vision_triage.json, vision.json (final).
 """
 from __future__ import annotations
 
-import base64
 import json
 import shutil
 import subprocess
@@ -24,7 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import env
+from . import llm
+from .llm import ImagePart, Part, TextPart
 from .models import VisionFrame
 from .signals import clusters
 
@@ -155,16 +158,10 @@ def extract_burst(source: Path, t: float, out_dir: Path, *, width: int,
     return sorted(out_dir.glob(f"{tag}_*.jpg"))[:n]
 
 
-# ----------------------------------------------------------------- claude ----
+# ------------------------------------------------------------------- model ----
 def _batches(seq: list, n: int) -> Iterable[list]:
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
-
-
-def _img_block(path: Path) -> dict:
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {"type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
 def _clamp01(v: Any) -> float:
@@ -175,32 +172,37 @@ def _clamp01(v: Any) -> float:
 
 
 def _call_batches(
-    client, *, model: str, system: str, tool: dict, batches: list[list[dict]],
-    concurrency: int, meter=None, max_tokens: int = 2048,
-) -> list[Any]:
-    """Run one messages.create per batch concurrently; return the responses.
+    *, model: str, system: str, tool: dict, batches: list[list[Part]],
+    concurrency: int, cfg: dict | None, meter=None, max_tokens: int = 2048,
+) -> list[dict]:
+    """Run one structured call per batch concurrently; return the parsed objects.
 
     A failed batch is logged and dropped (its frames simply get no score) so one
-    transient API error does not throw away the batches that already succeeded.
+    transient error does not throw away the batches that already succeeded.
     """
     lock = threading.Lock()
 
-    def one(content: list[dict]):
+    class _LockedMeter:
+        """Serialise meter.add across the pool (CostMeter is not thread-safe)."""
+        def add(self, m: str, usage) -> None:
+            with lock:
+                meter.add(m, usage)
+
+    locked = _LockedMeter() if meter is not None else None
+
+    def one(content: list[Part]) -> dict | None:
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=max_tokens, system=system, tools=[tool],
-                tool_choice={"type": "tool", "name": tool["name"]},
-                messages=[{"role": "user", "content": content}],
+            return llm.structured(
+                role="vision", model=model, max_tokens=max_tokens, system=system,
+                content=content, schema=tool["input_schema"], tool_name=tool["name"],
+                tool_description=tool.get("description", ""), cfg=cfg, meter=locked,
             )
         except Exception as e:  # noqa: BLE001
             print(f"[yellow]vision batch failed ({type(e).__name__}: {e}) — skipped")
             return None
-        if meter is not None:
-            with lock:
-                meter.add(model, msg.usage)
-        return msg
 
-    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+    workers = llm.vision_concurrency(cfg, concurrency)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(one, batches))
     ok = [r for r in results if r is not None]
     if batches and not ok:
@@ -208,23 +210,17 @@ def _call_batches(
     return ok
 
 
-def _tool_items(msg: Any, key: str) -> list[dict]:
-    items: list[dict] = []
-    for block in msg.content:
-        if getattr(block, "type", None) == "tool_use":
-            items.extend(block.input.get(key, []) or [])
-    return items
+def _items(data: dict, key: str) -> list[dict]:
+    return [it for it in (data.get(key) or []) if isinstance(it, dict)]
 
 
 def triage_frames(
     frames: list[tuple[int, float, Path]], *, model: str, categories: list[str],
-    max_frames_per_call: int, concurrency: int, meter=None,
+    max_frames_per_call: int, concurrency: int, cfg: dict | None = None, meter=None,
 ) -> list[VisionFrame]:
     """Tier 1: rough score for every grid frame."""
     if not frames:
         return []
-    from anthropic import Anthropic
-    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
     system = (
         "You triage Star Citizen gameplay frames for short-form highlight potential. "
         f"For every frame return scores 0..1 for each category: {', '.join(categories)}, "
@@ -235,23 +231,24 @@ def triage_frames(
         "in progress is 0.8+. Score each shown frame by its index."
     )
     ts_by_index = {idx: t for idx, t, _ in frames}
-    batches: list[list[dict]] = []
+    batches: list[list[Part]] = []
     for chunk in _batches(frames, max_frames_per_call):
-        content: list[dict] = [{"type": "text",
-                                "text": "Score these frames. Each image is preceded by its frame index."}]
+        content: list[Part] = [TextPart("Score these frames. Each image is preceded by its frame index.")]
         for idx, _t, path in chunk:
-            content.append({"type": "text", "text": f"index {idx}:"})
-            content.append(_img_block(path))
+            content.append(TextPart(f"index {idx}:"))
+            content.append(ImagePart(path))
         batches.append(content)
 
     out: list[VisionFrame] = []
-    for msg in _call_batches(client, model=model, system=system, tool=_FRAME_TOOL,
-                             batches=batches, concurrency=concurrency, meter=meter):
-        for fr in _tool_items(msg, "frames"):
+    for data in _call_batches(model=model, system=system, tool=_FRAME_TOOL, batches=batches,
+                              concurrency=concurrency, cfg=cfg, meter=meter):
+        for fr in _items(data, "frames"):
             idx = fr.get("index")
             if idx not in ts_by_index:
                 continue
             raw = fr.get("scores", {}) or {}
+            if not isinstance(raw, dict):
+                raw = {}
             out.append(VisionFrame(
                 t=ts_by_index[idx],
                 scores={c: _clamp01(raw.get(c)) for c in categories},
@@ -264,7 +261,7 @@ def triage_frames(
 
 def confirm_windows(
     source: Path, work: Path, peaks: list[float], *, model: str, categories: list[str],
-    width: int, max_windows_per_call: int, concurrency: int, meter=None,
+    width: int, max_windows_per_call: int, concurrency: int, cfg: dict | None = None, meter=None,
 ) -> dict[int, tuple[float, dict[str, float], str]]:
     """Tier 2: re-score each peak as a 3-frame burst. Returns {peak_index: (score, scores, label)}."""
     if not peaks:
@@ -281,8 +278,6 @@ def confirm_windows(
     if not bursts:
         return {}
 
-    from anthropic import Anthropic
-    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
     system = (
         "You judge candidate highlight moments from a Star Citizen Twitch stream. Each "
         "moment is a burst of consecutive frames about 1.5 seconds apart, in order. Judge "
@@ -293,24 +288,25 @@ def confirm_windows(
         "visual_score and a short label of what happens. Be strict: steady flight, menus, "
         "walking, talking to NPCs are below 0.3 even if the HUD is busy."
     )
-    batches: list[list[dict]] = []
+    batches: list[list[Part]] = []
     for chunk in _batches(bursts, max_windows_per_call):
-        content: list[dict] = [{"type": "text",
-                                "text": "Score these moments. Each burst is preceded by its moment index."}]
+        content: list[Part] = [TextPart("Score these moments. Each burst is preceded by its moment index.")]
         for idx, imgs in chunk:
-            content.append({"type": "text", "text": f"moment {idx}:"})
+            content.append(TextPart(f"moment {idx}:"))
             for p in imgs:
-                content.append(_img_block(p))
+                content.append(ImagePart(p))
         batches.append(content)
 
     out: dict[int, tuple[float, dict[str, float], str]] = {}
-    for msg in _call_batches(client, model=model, system=system, tool=_BURST_TOOL,
-                             batches=batches, concurrency=concurrency, meter=meter):
-        for it in _tool_items(msg, "moments"):
+    for data in _call_batches(model=model, system=system, tool=_BURST_TOOL, batches=batches,
+                              concurrency=concurrency, cfg=cfg, meter=meter):
+        for it in _items(data, "moments"):
             idx = it.get("index")
             if not isinstance(idx, int) or idx < 0 or idx >= len(peaks):
                 continue
             raw = it.get("scores", {}) or {}
+            if not isinstance(raw, dict):
+                raw = {}
             out[idx] = (_clamp01(it.get("visual_score")),
                         {c: _clamp01(raw.get(c)) for c in categories},
                         str(it.get("label", ""))[:80])
@@ -335,8 +331,9 @@ _FACECAM_TOOL = {
 }
 
 
-def detect_facecam(work: Path, model: str, meter=None, samples: int = 6) -> dict | None:
-    """Ask Claude Vision to locate the facecam box (fractions), or None if absent.
+def detect_facecam(work: Path, model: str, meter=None, samples: int = 6,
+                   cfg: dict | None = None) -> dict | None:
+    """Ask the vision model to locate the facecam box (fractions), or None if absent.
 
     Reads the frames already extracted for the vision stage; picks a few spread
     across the VOD (the cam is a static overlay, so a small sample is plenty).
@@ -356,53 +353,38 @@ def detect_facecam(work: Path, model: str, meter=None, samples: int = 6) -> dict
     step = max(1, len(imgs) // samples)
     picks = imgs[::step][:samples]
 
-    from anthropic import Anthropic
-    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
-    content: list[dict[str, Any]] = [{
-        "type": "text",
-        "text": (
-            "These frames are from ONE Twitch stream. A streamer webcam/facecam is "
-            "usually a fixed rectangular overlay in a corner (a person on camera), "
-            "distinct from the game. Locate that facecam box and return its bounding "
-            "box as fractions of the frame (x,y = top-left corner, w,h = size). If no "
-            "facecam/person overlay is present, set present=false."
-        ),
-    }]
+    content: list[Part] = [TextPart(
+        "These frames are from ONE Twitch stream. A streamer webcam/facecam is "
+        "usually a fixed rectangular overlay in a corner (a person on camera), "
+        "distinct from the game. Locate that facecam box and return its bounding "
+        "box as fractions of the frame (x,y = top-left corner, w,h = size). If no "
+        "facecam/person overlay is present, set present=false."
+    )]
     for p in picks:
-        content.append(_img_block(p))
+        content.append(ImagePart(p))
 
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=512,
-            tools=[_FACECAM_TOOL],
-            tool_choice={"type": "tool", "name": "report_facecam"},
-            messages=[{"role": "user", "content": content}],
+        inp = llm.structured(
+            role="vision", model=model, max_tokens=512, system=None, content=content,
+            schema=_FACECAM_TOOL["input_schema"], tool_name=_FACECAM_TOOL["name"],
+            tool_description=_FACECAM_TOOL["description"], cfg=cfg, meter=meter,
         )
     except Exception:  # noqa: BLE001 — detection is best-effort; fall back to config
         return None
-    if meter is not None:
-        meter.add(model, msg.usage)
 
     box: dict | None = None
-    for block in msg.content:
-        if getattr(block, "type", None) != "tool_use":
-            continue
-        inp = block.input
-        if not inp.get("present"):
-            break
+    if inp.get("present"):
         try:
             x = min(1.0, max(0.0, float(inp["x"])))
             y = min(1.0, max(0.0, float(inp["y"])))
             w = min(1.0, max(0.05, float(inp["w"])))
             h = min(1.0, max(0.05, float(inp["h"])))
+            # clamp box to stay inside the frame
+            w = min(w, 1.0 - x)
+            h = min(h, 1.0 - y)
+            box = {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
         except (KeyError, TypeError, ValueError):
-            break
-        # clamp box to stay inside the frame
-        w = min(w, 1.0 - x)
-        h = min(h, 1.0 - y)
-        box = {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
-        break
+            box = None
 
     try:
         cache.write_text(json.dumps(box or {}), encoding="utf-8")
@@ -434,8 +416,11 @@ def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[Visi
     interval = float(v.get("interval_seconds", 10))
     width = int(v.get("frame_width", 640))
     categories = list(v.get("categories", ["action", "pvp", "explosion", "ship_damage", "landing", "bug"]))
-    triage_model = v.get("triage_model") or v.get("model", "claude-haiku-4-5")
-    confirm_model = v.get("model", "claude-sonnet-4-6")
+    # Effective model names: the Claude names from config under anthropic, the
+    # ollama vision model under ollama. Stored in the cache params so a provider
+    # switch rebuilds vision_triage.json / vision.json instead of reusing them.
+    triage_model = llm.model_for("vision", cfg, v.get("triage_model") or v.get("model", "claude-haiku-4-5"))
+    confirm_model = llm.model_for("vision", cfg, v.get("model", "claude-sonnet-4-6"))
     concurrency = int(v.get("concurrency", 4))
     burst = bool(v.get("burst", True))
     triage_thr = float(v.get("triage_threshold", 0.4))
@@ -461,7 +446,7 @@ def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[Visi
         tri = triage_frames(
             frames, model=triage_model, categories=categories,
             max_frames_per_call=int(v.get("max_frames_per_call", 16)),
-            concurrency=concurrency, meter=meter,
+            concurrency=concurrency, cfg=cfg, meter=meter,
         )
         _save_frames_cache(work / "vision_triage.json", t_params, tri)
     log(f"  triage: {len(tri)} frames, {sum(1 for f in tri if f.visual_score >= triage_thr)} hot")
@@ -477,11 +462,10 @@ def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[Visi
         source, work, peaks, model=confirm_model, categories=categories,
         width=int(v.get("burst_width", 768)),
         max_windows_per_call=int(v.get("max_windows_per_call", 4)),
-        concurrency=concurrency, meter=meter,
+        concurrency=concurrency, cfg=cfg, meter=meter,
     )
     log(f"  confirm: {len(peaks)} bursts, {len(confirmed)} scored")
 
-    by_t = {f.t: f for f in tri}
     final: list[VisionFrame] = []
     in_window: set[float] = set()
     for i, (s, e, peak_t, _ps) in enumerate(hot):

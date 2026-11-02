@@ -1,18 +1,19 @@
-"""LLM stage: Claude scans the transcript and marks highlight windows.
+"""LLM stage: the text model scans the transcript and marks highlight windows.
 
-Strategy: split the transcript into overlapping time chunks, ask Claude for
-candidate moments per chunk (structured JSON via a tool, empty list allowed),
-then merge. This is a CANDIDATE pass: scores are only comparable within a chunk.
-The refine stage re-scores all candidates side by side with full context.
+Strategy: split the transcript into overlapping time chunks, ask the model for
+candidate moments per chunk (structured JSON, empty list allowed), then merge.
+This is a CANDIDATE pass: scores are only comparable within a chunk. The refine
+stage re-scores all candidates side by side with full context.
+
+All model calls go through src/llm.py (provider anthropic | ollama).
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from anthropic import Anthropic
-
-from .config import env
+from . import llm
+from .llm import TextPart
 from .models import Moment, TranscriptSegment
 
 # Transcript window (seconds) sent per LLM call. Keeps each prompt bounded.
@@ -76,9 +77,9 @@ def analyze(
     min_clip_seconds: float,
     max_clip_seconds: float,
     meter=None,
+    cfg: dict | None = None,
+    log=print,
 ) -> list[Moment]:
-    client = Anthropic(api_key=env("ANTHROPIC_API_KEY", required=True))
-
     system = (
         "You scan a Twitch stream transcript chunk for moments that could work as a "
         "short-form clip (TikTok/Shorts). "
@@ -94,56 +95,59 @@ def analyze(
 
     found: list[Moment] = []
     for chunk in _chunks(segments):
-        msg = client.messages.create(
+        data = llm.structured(
+            role="text",
             model=model,
             max_tokens=2048,
             system=system,
-            tools=[_MOMENT_TOOL],
-            tool_choice={"type": "tool", "name": "report_moments"},
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Transcript chunk (timestamps in seconds):\n\n"
-                    + _render(chunk)
-                    + "\n\nReport the strongest moments via report_moments."
-                ),
-            }],
+            content=[TextPart(
+                "Transcript chunk (timestamps in seconds):\n\n"
+                + _render(chunk)
+                + "\n\nReport the strongest moments via report_moments."
+            )],
+            schema=_MOMENT_TOOL["input_schema"],
+            tool_name=_MOMENT_TOOL["name"],
+            tool_description=_MOMENT_TOOL["description"],
+            cfg=cfg,
+            meter=meter,
+            log=log,
         )
-        if meter is not None:
-            meter.add(model, msg.usage)
-        found.extend(_parse(msg, categories, min_clip_seconds, max_clip_seconds))
+        found.extend(_parse(data, categories, min_clip_seconds, max_clip_seconds))
 
     found.sort(key=lambda m: m.score, reverse=True)
     return _dedupe(found)[:max_clips]  # callers pass a candidate budget, not the final count
 
 
-def _parse(msg: Any, categories: list[str], lo: float, hi: float) -> list[Moment]:
+def _parse(data: dict[str, Any], categories: list[str], lo: float, hi: float) -> list[Moment]:
     out: list[Moment] = []
-    for block in msg.content:
-        if getattr(block, "type", None) != "tool_use":
+    for m in (data.get("moments") or []):
+        if not isinstance(m, dict):
             continue
-        for m in block.input.get("moments", []):
-            try:
-                start = float(m["start"])
-                end = float(m["end"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if end <= start:
-                continue
-            # clamp duration to config window
-            if end - start < lo:
-                end = start + lo
-            if end - start > hi:
-                end = start + hi
-            cat = m.get("category", categories[0])
-            out.append(Moment(
-                start=round(start, 2),
-                end=round(end, 2),
-                category=cat if cat in categories else categories[0],
-                score=max(0.0, min(1.0, float(m.get("score", 0.5)))),
-                title=str(m.get("title", "Clip"))[:80],
-                reason=str(m.get("reason", "")),
-            ))
+        try:
+            start = float(m["start"])
+            end = float(m["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        # clamp duration to config window
+        if end - start < lo:
+            end = start + lo
+        if end - start > hi:
+            end = start + hi
+        cat = m.get("category", categories[0])
+        try:
+            score = float(m.get("score", 0.5))
+        except (TypeError, ValueError):
+            score = 0.5
+        out.append(Moment(
+            start=round(start, 2),
+            end=round(end, 2),
+            category=cat if cat in categories else categories[0],
+            score=max(0.0, min(1.0, score)),
+            title=str(m.get("title", "Clip"))[:80],
+            reason=str(m.get("reason", "")),
+        ))
     return out
 
 
