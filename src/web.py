@@ -801,7 +801,7 @@ def render_clip_custom(
             except (json.JSONDecodeError, OSError, TypeError):
                 segments = None
 
-    safe = "".join(ch if ch.isalnum() else "_" for ch in (title or "clip"))[:40] or "clip"
+    safe = clip_stage.slug(title or "clip")
     name = f"{int(start)}_edit_{safe}.mp4"
     out_path = data_dir() / vod_id / "clips" / name
     try:

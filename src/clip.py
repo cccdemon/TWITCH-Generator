@@ -52,6 +52,22 @@ def _subtitles_filter(srt_path: Path) -> str:
         "force_style='FontSize=18,Outline=2,Alignment=2,MarginV=60'"
     )
 
+_UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"})
+
+
+def slug(title: str, limit: int = 40) -> str:
+    """ASCII-only file stem from a caption.
+
+    The web routes only serve names matching [A-Za-z0-9._-]; German captions
+    from the local models ("Zerstörung", "erklärt") used to produce 400s, so
+    umlauts are transliterated and anything else non-ASCII is dropped.
+    """
+    import unicodedata
+    t = unicodedata.normalize("NFKD", title.translate(_UMLAUTS)).encode("ascii", "ignore").decode()
+    t = "".join(c if c.isalnum() else "_" for c in t).strip("_")
+    return t[:limit].rstrip("_") or "clip"
+
+
 
 def _split_filtergraph(width: int, height: int, facecam: dict) -> str:
     """filter_complex: top half = facecam region, bottom half = center-cropped game."""
@@ -87,7 +103,7 @@ def render_clip(
     burn_subtitles: bool,
 ) -> Clip:
     out_dir.mkdir(parents=True, exist_ok=True)
-    safe_title = "".join(c if c.isalnum() else "_" for c in moment.title)[:40] or "clip"
+    safe_title = slug(moment.title)
     name = f"{int(moment.start)}_{moment.category}_{safe_title}"
     out_path = out_dir / f"{name}.mp4"
 
