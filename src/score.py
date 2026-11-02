@@ -58,6 +58,20 @@ def _vision_signal(frames: list[VisionFrame]) -> Signal:
     return [(f.t, f.visual_score) for f in frames]
 
 
+def _rank_calibrate(moments: list[Moment], floor: float = 0.3) -> dict[int, float]:
+    """Percentile-rank the text scores across the whole VOD → floor..1.0.
+
+    Small local models hand out 0.8-0.9 to almost every chunk, so the raw score
+    carries no ranking information and text swamps the fusion. Ranking keeps the
+    model's *order* (its real signal) and spreads it over the scale. Returns
+    {id(moment): calibrated}. Needs ≥ 5 moments; fewer → raw scores."""
+    if len(moments) < 5:
+        return {id(m): m.score for m in moments}
+    order = sorted(moments, key=lambda m: m.score)
+    n = len(order) - 1
+    return {id(m): round(floor + (1.0 - floor) * i / n, 4) for i, m in enumerate(order)}
+
+
 def fuse(
     text_moments: list[Moment],
     vision_frames: list[VisionFrame],
@@ -79,6 +93,11 @@ def fuse(
     lead = float(score_cfg.get("lead_seconds", 5))
     max_clips = int(a_cfg.get("max_clips", 10))
     factor = int(score_cfg.get("candidate_factor", 3))
+    # Optional (off by default = prod behaviour): rank-calibrated text scores and
+    # a bonus when several independent signals agree on the same window.
+    calibrated = _rank_calibrate(text_moments) if score_cfg.get("calibrate_text") == "rank" else None
+    agree_bonus = float(score_cfg.get("agreement_bonus", 0.0))
+    agree_min = float(score_cfg.get("agreement_min", 0.4))
 
     v_interval = float(v_cfg.get("interval_seconds", 10))
     v_thresh = float(v_cfg.get("highlight_threshold", 0.5))
@@ -98,12 +117,16 @@ def fuse(
 
     fused: list[Moment] = []
     for start, end, tm, origin in candidates:
-        text_s = tm.score if tm else 0.0
+        text_s = (calibrated[id(tm)] if calibrated else tm.score) if tm else 0.0
         vframes = _vision_in(vision_frames, start, end)
         video_s = max((f.visual_score for f in vframes), default=0.0)
         audio_s = max_in(audio, start, end)
         chat_s = max_in(chat, start, end)
         highlight = wC * chat_s + wA * audio_s + wT * text_s + wV * video_s
+        if agree_bonus:
+            agreeing = sum(1 for s in (chat_s, audio_s, text_s, video_s) if s >= agree_min)
+            if agreeing >= 2:
+                highlight = min(1.0, highlight + agree_bonus * (agreeing - 1))
 
         vcat, vlabel = _top_category(vframes, "action")
         if tm:

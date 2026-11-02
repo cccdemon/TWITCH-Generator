@@ -290,12 +290,20 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
         log(f"[yellow]llm: prompt ≈{est} tokens vs num_ctx {num_ctx} for role={role} — "
             f"Ollama will truncate silently; raise llm.ollama.num_ctx.{role}")
 
+    # Reasoning: off by default (schema-constrained output gains nothing from it on
+    # Qwen3). Reasoning-only models (gpt-oss) ignore `false`; for them set
+    # llm.ollama.think to "low"|"medium"|"high" and the thinking budget is added
+    # on top of max_tokens so the reasoning cannot starve the answer.
+    think = o.get("think", False)
+    num_predict = int(max_tokens)
+    if think not in (False, None, "false"):
+        num_predict += int(o.get("think_budget_tokens", 8192))
     body: dict[str, Any] = {
         "model": model,
         "stream": False,
-        "think": False,
+        "think": think if think not in (None, "false") else False,
         "format": schema,
-        "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": int(max_tokens)},
+        "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": num_predict},
         "messages": messages,
     }
 
@@ -344,7 +352,7 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
         msg_obj = data.get("message") or {}
         text = msg_obj.get("content") or ""
         thinking = msg_obj.get("thinking") or ""
-        if thinking:
+        if thinking and think in (False, None, "false"):
             _warn_thinking(model, len(thinking), len(text), log)
         try:
             obj = json.loads(text)
@@ -375,8 +383,9 @@ def _warn_thinking(model: str, think_chars: int, content_chars: int, log) -> Non
             return
         _thinking_warned.add(model)
     log(f"[yellow]llm: {model} returned {think_chars} chars of thinking next to {content_chars} chars "
-        "of answer although think=false — this is a thinking model variant; switch "
-        "llm.ollama.*_model to its -instruct tag or the JSON will get cut off")
+        "of answer although think=false — this model reasons regardless. Either use its "
+        "-instruct tag, or set llm.ollama.think: medium (plus think_budget_tokens) so the "
+        "reasoning gets its own budget instead of eating the JSON answer")
 
 
 def _log_speed(data: dict, model: str, wall: float, est: int, log) -> None:

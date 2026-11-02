@@ -68,50 +68,78 @@ def _download(vod_id: str, *, log=print) -> list[tuple[float, str]]:
     import httpx
 
     out: list[tuple[float, str]] = []
+    seen: set[str] = set()
     cursor: str | None = None
+    offset = 0.0
     pages = 0
+    empty_cursor_pages = 0
     headers = {"Client-ID": _GQL_CLIENT_ID, "Content-Type": "application/json"}
+
+    def fetch(client, variables: dict) -> dict:
+        body = [{
+            "operationName": "VideoCommentsByOffsetOrCursor",
+            "variables": variables,
+            "extensions": {"persistedQuery": {"version": 1, "sha256Hash": _GQL_COMMENTS_HASH}},
+        }]
+        for attempt in range(4):
+            try:
+                r = client.post(_GQL, json=body)
+                r.raise_for_status()
+                data = r.json()[0]
+                if "data" not in data:
+                    raise RuntimeError(f"gql: {str(data)[:200]}")
+                return ((data["data"].get("video") or {}).get("comments") or {})
+            except Exception:  # noqa: BLE001
+                if attempt == 3:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        return {}
+
     with httpx.Client(timeout=30, headers=headers) as client:
         while True:
-            variables: dict = {"videoID": vod_id}
-            if cursor:
-                variables["cursor"] = cursor
+            # Twitch's cursor paging has started returning empty pages (observed
+            # 2026-11: page 1 fine, every cursor page `edges: []`). Offset paging
+            # still works, so after an empty cursor page we continue from the
+            # last offset seen and drop duplicates by comment id.
+            if cursor and empty_cursor_pages == 0:
+                comments = fetch(client, {"videoID": vod_id, "cursor": cursor})
             else:
-                variables["contentOffsetSeconds"] = 0
-            body = [{
-                "operationName": "VideoCommentsByOffsetOrCursor",
-                "variables": variables,
-                "extensions": {"persistedQuery": {"version": 1, "sha256Hash": _GQL_COMMENTS_HASH}},
-            }]
-            data: dict = {}
-            for attempt in range(4):
-                try:
-                    r = client.post(_GQL, json=body)
-                    r.raise_for_status()
-                    data = r.json()[0]
-                    if "data" not in data:
-                        raise RuntimeError(f"gql: {str(data)[:200]}")
-                    break
-                except Exception:  # noqa: BLE001
-                    if attempt == 3:
-                        raise
-                    time.sleep(1.5 * (attempt + 1))
-            video = data["data"].get("video") or {}
-            comments = video.get("comments") or {}
+                comments = fetch(client, {"videoID": vod_id, "contentOffsetSeconds": int(offset)})
             edges = comments.get("edges") or []
+            new = 0
             for e in edges:
                 node = e.get("node") or {}
                 t = node.get("contentOffsetSeconds")
+                if t is None:
+                    continue
+                cid = str(node.get("id") or f"{t}:{len(out)}")
+                if cid in seen:
+                    continue
+                seen.add(cid)
                 frags = (node.get("message") or {}).get("fragments") or []
                 text = "".join(f.get("text") or "" for f in frags)
-                if t is not None:
-                    out.append((float(t), text[:200]))
+                out.append((float(t), text[:200]))
+                offset = max(offset, float(t))
+                new += 1
             pages += 1
+            has_next = bool((comments.get("pageInfo") or {}).get("hasNextPage"))
+            if not edges and cursor and empty_cursor_pages == 0:
+                empty_cursor_pages += 1      # cursor paging broken → switch to offsets
+                continue
+            if not edges or (new == 0 and not has_next):
+                break
+            if new == 0:
+                # offset page returned only known messages: nudge past them
+                offset += 1.0
+                if pages > 20000:
+                    break
+                continue
             cursor = edges[-1].get("cursor") if edges else None
-            if not cursor or not (comments.get("pageInfo") or {}).get("hasNextPage"):
+            if not has_next and not cursor:
                 break
             if pages % 100 == 0:
                 log(f"  chat: {len(out)} messages so far…")
+    out.sort(key=lambda x: x[0])
     return out
 
 

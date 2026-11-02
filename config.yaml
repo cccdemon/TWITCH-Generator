@@ -21,6 +21,8 @@ llm:
       text: 32768                  # a vision batch of 16 frames ~17.5k (≈1100 tokens per 640px image)
       vision: 32768
     timeout_seconds: 600           # per request
+    think: false                   # reasoning off; reasoning-only models (gpt-oss) take low|medium|high
+    think_budget_tokens: 8192      # extra num_predict for the reasoning when think is on
 
 whisper:
   # faster-whisper    — in-process CTranslate2 (CPU here). Production default.

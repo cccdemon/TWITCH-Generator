@@ -56,13 +56,26 @@ _RUBRIC = (
 )
 
 
-# Appended to the system prompt for the ollama provider only (one-clip example).
+# Appended to the system prompt for the ollama provider only (worked examples +
+# the judgement rules small models tend to skip).
 _FEW_SHOT = (
+    "Judgement rules:\n"
+    "- A viewer who never watched this stream must get it in 3 seconds. Inside jokes, "
+    "nostalgia and small talk about drinks or ads are NOT clips, however the first pass scored them.\n"
+    "- video >= 0.7 means confirmed on-screen action (fight, explosion, crash). That is a clip "
+    "even when the transcript is quiet or empty; do not drop it for a talk moment.\n"
+    "- Two agreeing signals (chat + audio, video + audio, chat + video) beat one high text score.\n"
+    "- 'statement' = a sharp opinion said with conviction, quotable on its own. "
+    "'interesting' = the viewer learns something concrete (mechanic, trick, story). "
+    "'funny' needs a real punchline or a reaction, not just a swear word.\n"
     "Example of the expected output shape (values are illustrative, index refers to "
     "the candidate number):\n"
-    '{"clips": [{"index": 4, "start": 3621.0, "end": 3645.5, "score": 0.82, '
+    '{"clips": [{"index": 4, "start": 3621.0, "end": 3652.5, "score": 0.82, '
     '"category": "funny", "title": "Schiff explodiert beim Einparken", '
-    '"reason": "hook: calm landing talk; payoff: crash + chat erupts at 3640"}]}\n'
+    '"reason": "hook: calm landing talk; payoff: crash + chat erupts at 3640"}, '
+    '{"index": 11, "start": 3598.0, "end": 3631.0, "score": 0.78, '
+    '"category": "pvp", "title": "Dogfight bis zum letzten Treffer", '
+    '"reason": "video 0.9 confirmed combat, audio burst; no speech needed"}]}\n'
     "Return an empty clips array if nothing clears 0.5."
 )
 

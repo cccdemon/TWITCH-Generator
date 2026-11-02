@@ -13,8 +13,13 @@ llm:
   provider: ollama
   ollama:
     base_url: http://ollama:11434
-    text_model: qwen3:14b          # analyze + refine  (bootstrap.sh pulls what is named here)
+    # analyze + refine. gpt-oss:20b (13 GB MXFP4, reasoning model) judged the same 30
+    # candidates far better than qwen3:14b on 2026-11-02: it kept the confirmed fights
+    # and dropped small talk. It cannot stop reasoning, so think + budget below.
+    text_model: gpt-oss:20b
     vision_model: qwen3-vl:8b-instruct   # triage, confirm, facecam. NOT qwen3-vl:8b: that tag is the thinking variant and ignores think:false
+    think: medium                  # false for qwen3; gpt-oss needs low|medium|high ("low" returned empty selections)
+    think_budget_tokens: 12000     # added to num_predict so the reasoning cannot starve the JSON answer
     num_ctx:                       # refine prompts reach ~25k tokens; needs OLLAMA_FLASH_ATTENTION + q8 KV (compose)
       text: 32768
       vision: 32768                # one 640px frame ≈ 1100 tokens on qwen3-vl → 16 frames/call ≈ 17.5k (measured 2026-11-02)
@@ -71,22 +76,31 @@ vision:
 analyze:
   model: "claude-sonnet-4-6"       # ignored under ollama (text_model is used)
   max_clips: 10
-  min_clip_seconds: 15
-  max_clip_seconds: 30
+  min_clip_seconds: 20             # 15 produced hard cuts with no setup; 20-45 leaves room for hook + payoff
+  max_clip_seconds: 45
   categories:
     - funny
-    - emotional
+    - interesting
+    - statement
     - exciting
-    - skillful
+  # Definitions handed to the text model with the category list (local models need them).
+  category_hints:
+    funny: "a real punchline or a reaction that makes strangers laugh, not just swearing"
+    interesting: "the viewer learns something concrete: a game mechanic, a trick, a story, a fact"
+    statement: "a sharp opinion or hot take said with conviction, quotable on its own"
+    exciting: "tension that resolves: a close call, a win, a loss, a big reaction to something happening"
 
 score:
   weights:
     chat: 0.35
     audio: 0.15
-    text: 0.25
-    video: 0.25
+    text: 0.20                 # local text model over-scores; rank calibration below keeps only its ordering
+    video: 0.30
   lead_seconds: 5
   candidate_factor: 3
+  calibrate_text: rank       # percentile-rank the text scores across the VOD (0.3..1.0) instead of raw 0.8-0.9 everywhere
+  agreement_bonus: 0.1       # +0.1 per additional signal >= agreement_min on the same window
+  agreement_min: 0.4
 
 refine:
   enabled: true              # set false if the local model lets too much through (documented fallback)
@@ -106,8 +120,8 @@ clip:
     y: 0.0
     w: 0.22
     h: 0.22
-  pad_start: 1.0
-  pad_end: 1.0
+  pad_start: 1.5               # a breath before the first word
+  pad_end: 1.5                 # let the punchline land
   burn_subtitles: false
 
 upload:

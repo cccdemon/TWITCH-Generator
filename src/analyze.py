@@ -80,10 +80,16 @@ def analyze(
     cfg: dict | None = None,
     log=print,
 ) -> list[Moment]:
+    # Optional per-category definitions from config (analyze.category_hints) so the
+    # model scores against the operator's idea of "funny"/"statement"/… instead of its own.
+    hints = ((cfg or {}).get("analyze") or {}).get("category_hints") or {}
+    cat_text = ", ".join(categories)
+    if hints:
+        cat_text = "; ".join(f"{c} = {hints[c]}" if c in hints else c for c in categories)
     system = (
         "You scan a Twitch stream transcript chunk for moments that could work as a "
         "short-form clip (TikTok/Shorts). "
-        f"Categories: {', '.join(categories)}. "
+        f"Categories: {cat_text}. "
         f"Each moment is {min_clip_seconds:.0f}-{max_clip_seconds:.0f}s, starts at a sentence "
         "start and ends right after a clear payoff (laugh, big play, raw emotion, tension spike). "
         "Use only timestamps present in the transcript. The transcript is machine-generated "
