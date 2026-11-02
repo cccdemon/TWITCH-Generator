@@ -1,0 +1,111 @@
+# ClipBox: TWITCH-Generator fully local (Ollama on ROCm + whisper.cpp on Vulkan).
+#
+#   cd /opt/twitch-generator/deploy/local
+#   docker compose -f docker-compose.local.yml up -d --build
+#
+# .env is written by bootstrap.sh (USERS, SESSION_SECRET, PUBLIC_URL, RENDER_GID,
+# VIDEO_GID, OLLAMA_*_MODEL, WHISPER_*). Start order: ollama healthy → ollama-init
+# pulls the models and exits 0 → app starts; whisper must be healthy (model file
+# present, server listening) before app starts. So the UI never accepts a job
+# while a backend is still downloading.
+name: clipbox
+
+services:
+  app:
+    build:
+      context: ../..
+    image: twitch-generator:local
+    container_name: clipbox-app
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "9443:9443"
+    volumes:
+      - ../../data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+      whisper:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: clipbox-ollama
+    restart: unless-stopped
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "${RENDER_GID:?set by bootstrap.sh}"
+      - "${VIDEO_GID:?set by bootstrap.sh}"
+    environment:
+      # 16 GB VRAM: one model at a time, one request at a time.
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-10m}"
+      # Flash attention + q8 KV cache halve the context memory; needed for
+      # qwen3:14b at num_ctx 32768 to stay fully on the GPU.
+      OLLAMA_FLASH_ATTENTION: "${OLLAMA_FLASH_ATTENTION:-1}"
+      OLLAMA_KV_CACHE_TYPE: "${OLLAMA_KV_CACHE_TYPE:-q8_0}"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  # One-shot: pull the models named in config.yaml (bootstrap.sh copies them
+  # into .env), then exit. Re-running is a no-op once the models are present.
+  ollama-init:
+    image: ollama/ollama:rocm
+    container_name: clipbox-ollama-init
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for m in "${OLLAMA_TEXT_MODEL:?set by bootstrap.sh}" "${OLLAMA_VISION_MODEL:?set by bootstrap.sh}"; do
+          echo "pulling $$m"
+          ollama pull "$$m"
+        done
+        ollama list
+
+  whisper:
+    image: ghcr.io/ggml-org/whisper.cpp:main-vulkan
+    container_name: clipbox-whisper
+    restart: unless-stopped
+    devices:
+      - /dev/dri
+    group_add:
+      - "${RENDER_GID:?set by bootstrap.sh}"
+      - "${VIDEO_GID:?set by bootstrap.sh}"
+    environment:
+      WHISPER_MODEL: "${WHISPER_MODEL:-large-v3-turbo}"
+      WHISPER_LANG: "${WHISPER_LANG:-de}"
+      WHISPER_THREADS: "${WHISPER_THREADS:-6}"
+      WHISPER_EXTRA_ARGS: "${WHISPER_EXTRA_ARGS:--fa}"
+    volumes:
+      - whisper-models:/models
+      - ./whisper-entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    healthcheck:
+      # any HTTP answer = server up (the image ships curl; / may 404, that is fine)
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 900s   # first start downloads the ~1.6 GB model
+
+volumes:
+  ollama:
+  whisper-models:

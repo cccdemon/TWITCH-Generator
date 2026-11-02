@@ -1,0 +1,70 @@
+#cloud-config
+# ClipBox autoinstall for Ubuntu Server 24.04.x (tested target: ubuntu-24.04.4-live-server-amd64.iso,
+# HWE kernel 6.17 — RDNA4 needs >= 6.13). Delivered by the Ventoy auto_install plugin.
+#
+# >>> Edit before use (see deploy/local/usb/README.md): <<<
+#   CLIPBOX_REPO_URL     https://github.com/cccdemon/TWITCH-Generator.git
+#   CLIPBOX_REPO_BRANCH  clipbox
+#   password hash        REPLACE_WITH_PASSWORD_HASH   (openssl passwd -6)
+#
+# Only the storage step is interactive: pick DISK 2 (the non-Windows disk),
+# "Use an entire disk", no LVM, no encryption. Everything else is automatic.
+# Windows on disk 1 is never touched; GRUB (os-prober) adds it to the boot menu.
+autoinstall:
+  version: 1
+  interactive-sections:
+    - storage
+
+  locale: de_DE.UTF-8
+  keyboard:
+    layout: de
+  timezone: Europe/Berlin
+
+  source:
+    id: ubuntu-server
+    search_drivers: false
+  codecs:
+    install: false
+  drivers:
+    install: false
+
+  identity:
+    hostname: clipbox
+    username: clip
+    # SHA-512 crypt hash of the login password:  openssl passwd -6
+    password: "REPLACE_WITH_PASSWORD_HASH"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  kernel:
+    package: linux-generic-hwe-24.04
+
+  updates: security
+  packages:
+    - docker.io
+    - docker-compose-v2
+    - git
+    - curl
+    - mesa-vulkan-drivers
+    - vulkan-tools
+    - linux-firmware
+    - os-prober
+
+  late-commands:
+    # Dual boot: let GRUB find Windows on disk 1, default Ubuntu, 10 s menu.
+    - curtin in-target --target=/target -- sh -c "sed -i 's/^#\?GRUB_TIMEOUT=.*/GRUB_TIMEOUT=10/; s/^#\?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub"
+    - curtin in-target --target=/target -- sh -c "grep -q '^GRUB_DISABLE_OS_PROBER=' /etc/default/grub && sed -i 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub || echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub"
+    - curtin in-target --target=/target -- update-grub
+    # GPU + Docker access for the login user.
+    - curtin in-target --target=/target -- usermod -aG docker,render,video clip
+    # The application repo (URL/branch: keep in sync with the header above).
+    - curtin in-target --target=/target -- git clone --branch clipbox https://github.com/cccdemon/TWITCH-Generator.git /opt/twitch-generator
+    - curtin in-target --target=/target -- chown -R clip:clip /opt/twitch-generator
+    - curtin in-target --target=/target -- chmod +x /opt/twitch-generator/deploy/local/bootstrap.sh /opt/twitch-generator/deploy/local/whisper-entrypoint.sh
+    # First-boot bootstrap: compose up, model pull, GPU check, motd.
+    - curtin in-target --target=/target -- cp /opt/twitch-generator/deploy/local/clipbox-bootstrap.service /etc/systemd/system/clipbox-bootstrap.service
+    - curtin in-target --target=/target -- systemctl enable clipbox-bootstrap.service
+    - |
+      curtin in-target --target=/target -- sh -c "printf '\n  ClipBox - first boot runs the bootstrap (model download ~15 GB).\n  Watch it with   journalctl -u clipbox-bootstrap -f\n\n' > /etc/motd"

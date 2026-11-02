@@ -1,0 +1,16 @@
+[Unit]
+Description=ClipBox first-boot bootstrap (compose up, model pull, GPU check)
+Documentation=file:///opt/twitch-generator/deploy/local/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/twitch-generator/deploy/local/bootstrap.sh
+TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

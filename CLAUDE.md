@@ -34,13 +34,13 @@ Stages are modules with one public function each. Every stage caches its output 
 |---|---|---|
 | resolve + download | `twitch.py` | `info.json`, `<vod_id>.mp4` |
 | single-pass decode | `extract.py` | writes `audio_chunks/*.wav`, `frames/f_*.jpg` + `meta.json`, `loudness.json` in one ffmpeg run; purely an accelerator, every consumer still extracts on its own if missing |
-| Whisper | `transcribe.py` | `transcript.json` |
+| Whisper | `transcribe.py` | `transcript.json` (backend `faster-whisper` in-process, or `whispercpp-server` over HTTP) |
 | chat velocity | `chat.py` | `chat_messages.json` (raw replay via Twitch public GQL, hard-coded web client id + persisted-query hash, no API key), `chat.json` |
 | audio bursts | `audio.py` | `loudness.json` (raw ebur128), `audio.json` |
-| vision, two-tier | `vision.py` | `vision_triage.json` (Haiku, every grid frame), `frames/bursts/`, `vision.json` (Sonnet-confirmed), `facecam.json` |
-| text candidates (Claude) | `analyze.py` | none |
+| vision, two-tier | `vision.py` | `vision_triage.json` (cheap model, every grid frame), `frames/bursts/`, `vision.json` (strong-model confirmed), `facecam.json` |
+| text candidates (LLM) | `analyze.py` | none |
 | fusion | `score.py` | `candidates.json` |
-| refine (Claude, one global call) | `refine.py` | `moments.json` |
+| refine (LLM, one global call) | `refine.py` | `moments.json` |
 | render | `clip.py` | `clips/*.mp4` (+ `.srt`) |
 | upload | `upload.py` | — |
 
@@ -52,7 +52,9 @@ Whisper runs in the main thread while chat, audio and vision run in a thread poo
 
 **Refine** (`refine.py`): one Claude call sees all candidates with transcript context, re-scores on a shared rubric, may drop everything, and moves boundaries. `snap_to_segments` then snaps start earlier / end later onto transcript segment edges. On API failure it falls back to the fused ranking plus snapping.
 
-Claude calls use tool-use for structured output and feed `usage` into a `pricing.CostMeter`; totals go to `cost.json`. `timing.py` keeps a learned processing-time factor in `data/timing.json` (EMA) and writes per-run `run.json` for the UI's ETA. When adding a Claude call, pass `meter=` through and add the model to `pricing._PRICES` if new. Concurrent calls must lock around `meter.add` (see `vision._call_batches`).
+**Model calls** (`llm.py`): every structured model call goes through `llm.structured(role, system, content=[TextPart|ImagePart], schema, tool_name, cfg, meter, model=<stage's Claude model>)` and returns the parsed dict. `llm.provider` in `config.yaml` selects the backend: `anthropic` (default) = tool-use with forced `tool_choice`, model from the stage section, exactly the pre-`llm.py` requests; `ollama` = `POST /api/chat` with `format=<schema>`, `think: false`, temperature 0, per-role `num_ctx`, models from `llm.ollama.text_model|vision_model` (the Claude names are ignored), usage metered as `ollama/<model>` which `pricing` rates at $0. Never call the Anthropic SDK from a stage directly; the whole local deployment runs without `ANTHROPIC_API_KEY`. `llm.model_for()` gives the effective model name for cache params; `llm.vision_concurrency()` caps vision at 1 under ollama.
+
+Usage from each call feeds a `pricing.CostMeter`; totals go to `cost.json`. `timing.py` keeps a learned processing-time factor in `data/timing.json` (EMA) and writes per-run `run.json` for the UI's ETA. When adding a model call, pass `meter=` and `cfg=` through and add new Claude models to `pricing._PRICES`. Concurrent calls must lock around `meter.add` (see `vision._call_batches`).
 
 Shared dataclasses live in `src/models.py` (`TranscriptSegment`, `VodInfo`, `VisionFrame`, `Moment`, `Clip`, `UploadResult`).
 
@@ -66,7 +68,12 @@ Shared dataclasses live in `src/models.py` (`TranscriptSegment`, `VodInfo`, `Vis
 ### Config and secrets
 
 - `config.yaml` = tunables, read via `load_config()` as a plain dict; older stages receive explicit kwargs from `main.py`, newer ones (`chat`, `audio`, `vision`, `score`, `refine`) take `cfg` and read their own section. Cache files store the params they were built with and rebuild on mismatch. Mounted read-only in Docker. Note `clip.auto_render: false` stops the pipeline after `moments.json` so clips are rendered by hand in the web editor.
-- Secrets = env vars read through `config.env()`. `settings_store.py` persists UI-entered keys (`SETTING_KEYS`: Anthropic, Twitch, TikTok) to `data/settings.json` and `apply_settings()` pushes them into `os.environ` at startup (web) and at CLI run start. UI values override `.env`.
+- Secrets = env vars read through `config.env()`. `settings_store.py` persists UI-entered keys (`SETTING_KEYS`: Anthropic, Twitch, TikTok) to `data/settings.json` and `apply_settings()` pushes them into `os.environ` at startup (web) and at CLI run start. UI values override `.env`. The Settings page marks the Anthropic key "nicht benötigt" when `llm.provider` is `ollama` (`web._llm_provider`).
+- `llm:` and `whisper.backend/server_url` in the main `config.yaml` carry the prod defaults (`anthropic`, `faster-whisper`) and must stay that way; `deploy/local/config.yaml` is the local copy with `ollama` / `whispercpp-server`.
+
+### Local appliance (deploy/local/, "ClipBox")
+
+Home-PC deployment with zero cloud tokens: `docker-compose.local.yml` runs `app` (CPU), `ollama` (`ollama/ollama:rocm`, `/dev/kfd` + `/dev/dri`, one model at a time), `ollama-init` (one-shot `ollama pull`), `whisper` (`ghcr.io/ggml-org/whisper.cpp:main-vulkan`, `whisper-server`, model fetched by `whisper-entrypoint.sh`). `bootstrap.sh` (systemd oneshot `clipbox-bootstrap.service` on first boot, idempotent) writes `.env`, sets Docker log rotation, brings compose up, waits for the model pull and proves GPU use. `deploy/local/usb/` holds the Ventoy + Ubuntu autoinstall installer (`user-data`, `ventoy.json`, `build-usb.ps1`, German README). Operations doc: `deploy/local/README.md`; requirement: `docs/requirements/2026-11-02-anforderung-clipbox.md`; GPU measurements: `docs/spike-results.md`.
 
 ### Web layer (src/web.py, src/jobs.py)
 
@@ -82,13 +89,13 @@ Shared dataclasses live in `src/models.py` (`TranscriptSegment`, `VodInfo`, `Vis
 
 `clip.vertical` + `clip.layout: split` renders top half = facecam region, bottom half = center-cropped game, via one ffmpeg `filter_complex` (`clip._split_filtergraph`). Facecam box is fractions of the source frame, from (in priority) UI pick → `vision.detect_facecam` → `config.yaml` `clip.facecam`.
 
-## Planned work
-
-`docs/superpowers/specs/2026-10-29-local-llm-pipeline-design.md` (German, status: draft) describes moving the runtime to a home PC with a local LLM (Ollama) behind a new `src/llm.py` and a `llm.provider: ollama|anthropic` switch, Whisper on an AMD GPU via ROCm. Nothing of it is implemented yet; prod defaults must stay unchanged when it lands.
-
 ## Gotchas
 
-- Whisper on CPU is the bottleneck; `whisper.cpu_threads`, `chunk_seconds` and `beam_size: 1` are tuned for a 4-core box with 2 CPU / 4 GB caps in prod. Keep the chunking when touching `transcribe.py`.
+- Whisper on CPU is the bottleneck in prod; `whisper.cpu_threads`, `chunk_seconds` and `beam_size: 1` are tuned for a 4-core box with 2 CPU / 4 GB caps. Keep the chunking when touching `transcribe.py` — the `whispercpp-server` backend posts one chunk per request and adds the offset the same way.
+- `ollama/ollama:rocm` ships no `rocminfo`; the GPU proof is Ollama's own log line `inference compute … compute=gfx1201`. whisper.cpp proves itself with `ggml_vulkan: Found 1 Vulkan devices` (anything with `llvmpipe` = CPU).
+- Ollama truncates prompts above `num_ctx` silently. `llm.py` warns at >0.9·`num_ctx` from a `len/3` estimate and again when `prompt_eval_count` comes back far below it. The refine prompt is the big one (~25k tokens at 30 candidates).
+- `vision_triage.json`/`vision.json` store the effective model name (`llm.model_for`), so switching provider rebuilds them; `candidates.json`/`moments.json` do not, so compare providers with separate `TG_DATA_DIR`s.
+- The compose project interpolates `.env` from `deploy/local/` (`RENDER_GID`, `VIDEO_GID`, `OLLAMA_*_MODEL` are required); run `bootstrap.sh` rather than `docker compose up` by hand on a fresh box.
 - ffmpeg's `ebur128` line format includes a `TARGET:-23 LUFS` field between `t:` and `M:`; the regex in `audio.py` must keep tolerating it (the old one silently matched nothing).
 - The app was tuned for Star Citizen content; vision categories and the system prompt in `vision.py` are game-specific.
 - README's YouTube section (`YOUTUBE_CLIENT_SECRETS`, `-it` consent run) is stale; the code uses `YOUTUBE_CLIENT_ID/SECRET` + UI OAuth as described above.

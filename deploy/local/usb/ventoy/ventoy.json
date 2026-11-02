@@ -1,0 +1,14 @@
+{
+    "control": [
+        { "VTOY_DEFAULT_MENU_MODE": "0" },
+        { "VTOY_MENU_TIMEOUT": "10" }
+    ],
+    "auto_install": [
+        {
+            "image": "/ubuntu-24.04.4-live-server-amd64.iso",
+            "template": "/autoinstall/user-data",
+            "autosel": 1,
+            "timeout": 10
+        }
+    ]
+}

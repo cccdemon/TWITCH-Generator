@@ -1,0 +1,118 @@
+# ClipBox local config: TWITCH-Generator on the home PC, zero cloud tokens.
+# Copy of the main config.yaml with these deviations:
+#   llm.provider: ollama, whisper.backend: whispercpp-server, whisper.model large-v3-turbo,
+#   vision.concurrency: 1, vision.interval_seconds: 15 (6-hour budget; see docs/spike-results.md).
+# Env vars hold secrets (deploy/local/.env); this holds tunables.
+
+download:
+  format: "best"
+  reuse_existing: true
+
+# Local models via Ollama (ROCm). The Claude model names further down are ignored.
+llm:
+  provider: ollama
+  ollama:
+    base_url: http://ollama:11434
+    text_model: qwen3:14b          # analyze + refine  (bootstrap.sh pulls what is named here)
+    vision_model: qwen3-vl:8b      # triage, confirm, facecam
+    num_ctx:                       # refine prompts reach ~25k tokens; needs OLLAMA_FLASH_ATTENTION + q8 KV (compose)
+      text: 32768
+      vision: 8192
+    timeout_seconds: 600
+
+whisper:
+  backend: whispercpp-server       # GPU via the whisper container (Vulkan)
+  server_url: http://whisper:8080
+  model: "large-v3-turbo"          # informational; the file is chosen by WHISPER_MODEL in .env
+  language: de                     # null = autodetect; copied to WHISPER_LANG by bootstrap
+  chunk_seconds: 1800              # 30-min chunks, one request each
+  request_timeout_seconds: 3600
+  # faster-whisper only (unused here):
+  device: "cpu"
+  compute_type: "int8"
+  cpu_threads: 3
+  beam_size: 1
+
+signals:
+  interval_seconds: 10
+  baseline_window_seconds: 300
+
+chat:
+  enabled: true
+  lag_seconds: 8
+  highlight_threshold: 0.5
+
+audio:
+  enabled: true
+  scale_db: 8
+
+vision:
+  enabled: true
+  interval_seconds: 15       # 6-h VOD → 1440 frames → 90 triage calls of 16 frames; 10 = prod value
+  frame_width: 640
+  triage_model: "claude-haiku-4-5"   # ignored under ollama (vision_model is used)
+  model: "claude-sonnet-4-6"         # ignored under ollama
+  max_frames_per_call: 16
+  concurrency: 1             # Ollama serialises per model anyway; >1 only risks timeouts
+  triage_threshold: 0.4
+  burst: true
+  burst_width: 768
+  max_windows_per_call: 4
+  unconfirmed_discount: 0.6
+  highlight_threshold: 0.5
+  categories:
+    - action
+    - pvp
+    - explosion
+    - ship_damage
+    - landing
+    - bug
+
+analyze:
+  model: "claude-sonnet-4-6"       # ignored under ollama (text_model is used)
+  max_clips: 10
+  min_clip_seconds: 15
+  max_clip_seconds: 30
+  categories:
+    - funny
+    - emotional
+    - exciting
+    - skillful
+
+score:
+  weights:
+    chat: 0.35
+    audio: 0.15
+    text: 0.25
+    video: 0.25
+  lead_seconds: 5
+  candidate_factor: 3
+
+refine:
+  enabled: true              # set false if the local model lets too much through (documented fallback)
+  model: null
+  context_pad_seconds: 20
+  snap_tolerance_seconds: 2.5
+
+clip:
+  auto_render: true
+  vertical: true
+  width: 1080
+  height: 1920
+  layout: split
+  facecam_auto: true
+  facecam:
+    x: 0.0
+    y: 0.0
+    w: 0.22
+    h: 0.22
+  pad_start: 1.0
+  pad_end: 1.0
+  burn_subtitles: false
+
+upload:
+  platforms: []
+  privacy: "public"
+  tiktok:
+    mode: draft
+    privacy_level: SELF_ONLY

@@ -12,3 +12,6 @@ venv/
 *.mp4
 *.mkv
 *.ts
+
+# ClipBox bootstrap output
+FIRST-LOGIN.txt
