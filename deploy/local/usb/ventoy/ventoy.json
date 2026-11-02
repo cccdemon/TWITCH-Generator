@@ -5,7 +5,7 @@
     ],
     "auto_install": [
         {
-            "image": "/ubuntu-24.04.4-live-server-amd64.iso",
+            "image": "/ubuntu-24.04.5-live-server-amd64.iso",
             "template": "/autoinstall/user-data",
             "autosel": 1,
             "timeout": 10

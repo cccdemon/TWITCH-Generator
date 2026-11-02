@@ -1,6 +1,6 @@
 #cloud-config
-# ClipBox autoinstall for Ubuntu Server 24.04.x (tested target: ubuntu-24.04.4-live-server-amd64.iso,
-# HWE kernel 6.17 — RDNA4 needs >= 6.13). Delivered by the Ventoy auto_install plugin.
+# ClipBox autoinstall for Ubuntu Server 24.04.x (built for ubuntu-24.04.5-live-server-amd64.iso;
+# any 24.04.4+ ISO works, HWE kernel >= 6.17 — RDNA4 needs >= 6.13). Delivered by the Ventoy auto_install plugin.
 #
 # >>> Edit before use (see deploy/local/usb/README.md): <<<
 #   CLIPBOX_REPO_URL     https://github.com/cccdemon/TWITCH-Generator.git
