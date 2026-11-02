@@ -16,7 +16,7 @@ Anforderung: `docs/requirements/2026-11-02-anforderung-clipbox.md`.
 │        │                                                 ggml-large-v3-turbo           │
 │        ├─ vision.py  ──┐                                                               │
 │        ├─ analyze.py ──┤── src/llm.py ── HTTP /api/chat ──► ollama   ROCm, /dev/kfd    │
-│        └─ refine.py  ──┘   provider: ollama                   ├─ qwen3-vl:8b  (Vision) │
+│        └─ refine.py  ──┘   provider: ollama                   ├─ qwen3-vl:8b-instruct (Vision) │
 │                                                               └─ qwen3:14b    (Text)   │
 │  ollama-init  (einmalig: ollama pull beider Modelle, beendet sich mit 0)               │
 └───────────────────────────────────────────────────────────────────────────────────────┘

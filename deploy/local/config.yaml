@@ -14,7 +14,7 @@ llm:
   ollama:
     base_url: http://ollama:11434
     text_model: qwen3:14b          # analyze + refine  (bootstrap.sh pulls what is named here)
-    vision_model: qwen3-vl:8b      # triage, confirm, facecam
+    vision_model: qwen3-vl:8b-instruct   # triage, confirm, facecam. NOT qwen3-vl:8b: that tag is the thinking variant and ignores think:false
     num_ctx:                       # refine prompts reach ~25k tokens; needs OLLAMA_FLASH_ATTENTION + q8 KV (compose)
       text: 32768
       vision: 32768                # one 640px frame ≈ 1100 tokens on qwen3-vl → 16 frames/call ≈ 17.5k (measured 2026-11-02)

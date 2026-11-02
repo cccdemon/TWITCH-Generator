@@ -16,7 +16,7 @@ llm:
   ollama:
     base_url: http://ollama:11434
     text_model: qwen3:14b          # analyze + refine
-    vision_model: qwen3-vl:8b      # triage, confirm, facecam
+    vision_model: qwen3-vl:8b-instruct   # triage, confirm, facecam (-instruct: the plain tag is a thinking model)
     num_ctx:                       # context window per role; refine prompts reach ~25k tokens,
       text: 32768                  # a vision batch of 16 frames ~17.5k (≈1100 tokens per 640px image)
       vision: 32768

@@ -1,0 +1,13 @@
+{
+    "version": 0,
+    "requires": { "cockpit": "200" },
+    "menu": {
+        "index": {
+            "label": "ClipBox Monitor",
+            "order": 15,
+            "docs": [
+                { "label": "ClipBox README", "url": "https://github.com/cccdemon/TWITCH-Generator/blob/clipbox/deploy/local/README.md" }
+            ]
+        }
+    }
+}

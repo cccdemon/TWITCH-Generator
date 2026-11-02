@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>ClipBox Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="../base1/cockpit.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#151515; --mut:#6a6e73; --line:#d2d2d2; --card:#f5f5f5; --acc:#06c; --ok:#3e8635; --warn:#f0ab00; --bad:#c9190b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#f0f0f0; --mut:#a0a0a0; --line:#3c3f42; --card:#212427; --acc:#73bcf7; } }
+  body { margin:0; padding:20px 24px; font:14px/1.45 "RedHatText", system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:13px; letter-spacing:.05em; text-transform:uppercase; color:var(--mut); margin:22px 0 10px; }
+  .sub { color:var(--mut); margin-bottom:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; min-height:88px; }
+  .tile h4 { margin:0 0 6px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); }
+  .big { font-size:24px; font-weight:600; line-height:1.15; } .small { color:var(--mut); font-size:13px; margin-top:4px; }
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  .bar { height:7px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:10px; } .bar > i { display:block; height:100%; background:var(--acc); width:0; transition:width .3s; }
+  .stages { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 12px; }
+  .stage { padding:3px 10px; border-radius:999px; border:1px solid var(--line); font-size:12px; color:var(--mut); }
+  .stage.done { border-color:var(--ok); color:var(--ok); } .stage.now { border-color:var(--warn); color:var(--warn); font-weight:600; }
+  .chart { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:12px; }
+  .chart h4 { margin:0 0 8px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); display:flex; gap:14px; flex-wrap:wrap; }
+  .chart h4 span::before { content:"■ "; }
+  canvas { width:100%; height:130px; display:block; }
+  #err { color:var(--bad); } a { color:var(--acc); }
+  table { width:100%; border-collapse:collapse; font-size:13px; } td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); } th { color:var(--mut); font-weight:600; }
+</style>
+</head>
+<body>
+<h1>ClipBox Monitor</h1>
+<div class="sub" id="dev">liest /sys, /opt/twitch-generator/data und Ollama … <span id="err"></span></div>
+
+<h2>Pipeline</h2>
+<div class="sub" id="job">kein Job</div>
+<div class="stages" id="stages"></div>
+<div class="grid">
+  <div class="tile"><h4>Fortschritt</h4><div class="big" id="p-stage">–</div><div class="small" id="p-eta"></div><div class="bar"><i id="p-bar"></i></div></div>
+  <div class="tile"><h4>Stream-Länge · Laufzeit</h4><div class="big" id="p-time">–</div><div class="small" id="p-time-sub"></div></div>
+  <div class="tile"><h4>Tokens</h4><div class="big" id="p-tok">–</div><div class="small" id="p-tok-sub"></div></div>
+  <div class="tile"><h4>Tokens / s</h4><div class="big" id="p-toks">–</div><div class="small" id="p-toks-sub"></div></div>
+  <div class="tile"><h4>Whisper</h4><div class="big" id="p-wh">–</div><div class="small" id="p-wh-sub"></div></div>
+  <div class="tile"><h4>Vision</h4><div class="big" id="p-vis">–</div><div class="small" id="p-vis-sub"></div></div>
+  <div class="tile"><h4>Clips · Kosten</h4><div class="big" id="p-clips">–</div><div class="small" id="p-clips-sub"></div></div>
+  <div class="tile"><h4>Ollama</h4><div class="big" id="p-ol">–</div><div class="small" id="p-ol-sub"></div></div>
+</div>
+
+<h2>Hardware</h2>
+<div class="grid">
+  <div class="tile"><h4>GPU-Auslastung</h4><div class="big" id="busy">–</div><div class="small" id="busy-sub"></div><div class="bar"><i id="busy-bar"></i></div></div>
+  <div class="tile"><h4>GPU-Temperatur</h4><div class="big" id="tj">–</div><div class="small" id="tj-sub"></div></div>
+  <div class="tile"><h4>GPU-Leistung</h4><div class="big" id="pw">–</div><div class="small" id="pw-sub"></div><div class="bar"><i id="pw-bar"></i></div></div>
+  <div class="tile"><h4>VRAM</h4><div class="big" id="vram">–</div><div class="small" id="vram-sub"></div><div class="bar"><i id="vram-bar"></i></div></div>
+  <div class="tile"><h4>CPU</h4><div class="big" id="cpu">–</div><div class="small" id="cpu-sub"></div><div class="bar"><i id="cpu-bar"></i></div></div>
+  <div class="tile"><h4>RAM</h4><div class="big" id="ram">–</div><div class="small" id="ram-sub"></div><div class="bar"><i id="ram-bar"></i></div></div>
+  <div class="tile"><h4>Platte /</h4><div class="big" id="disk">–</div><div class="small" id="disk-sub"></div><div class="bar"><i id="disk-bar"></i></div></div>
+  <div class="tile"><h4>VOD-Daten</h4><div class="big" id="data">–</div><div class="small" id="data-sub"></div></div>
+</div>
+
+<h2>Verlauf (10 min)</h2>
+<div class="chart"><h4><span style="color:#73bcf7">GPU %</span><span style="color:#f0ab00">Hotspot °C</span><span style="color:#c9190b">VRAM °C</span><span style="color:#3e8635">CPU °C</span><span style="color:#a18fff">CPU Last %</span></h4><canvas id="c1"></canvas></div>
+<div class="chart"><h4><span style="color:#73bcf7">Leistung W</span><span style="color:#a18fff">Lüfter rpm/10</span><span style="color:#3e8635">VRAM GB×10</span></h4><canvas id="c2"></canvas></div>
+<div class="chart"><h4><span style="color:#73bcf7">Generierung tok/s (letzter Call)</span><span style="color:#f0ab00">Prefill tok/s ÷ 10</span><span style="color:#3e8635">Whisper Faktor ×</span></h4><canvas id="c3"></canvas></div>
+
+<h2>Tokens je Modell (laufender Job)</h2>
+<table><thead><tr><th>Modell</th><th>Calls</th><th>Tokens rein</th><th>Tokens raus</th></tr></thead><tbody id="models"><tr><td colspan="4" class="small">–</td></tr></tbody></table>
+
+<script>
+(function () {
+  const $ = (i) => document.getElementById(i);
+  const DATA = "/opt/twitch-generator/data";
+  const HIST = 300;            // 300 × 2 s = 10 min
+  const H = { busy: [], tj: [], tm: [], tc: [], cpu: [], pw: [], fan: [], vram: [], gen: [], pre: [], wh: [] };
+  const STAGES = ["download", "extract", "signals", "analyze", "refine", "render", "upload", "done"];
+  let dev = null, hw = null, cpuhw = null, powerCap = null, vramTotal = null, ncpu = 1, lastCpu = null, tickN = 0, du = null, lastDf = null;
+
+  const read = (p) => cockpit.file(p).read().then(s => (s == null ? null : s.trim())).catch(() => null);
+  const readJson = async (p) => { const s = await read(p); try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+  const num = async (p, div = 1) => { const v = await read(p); return v == null || v === "" ? null : Number(v) / div; };
+  const cls = (t, w, b) => t == null ? "" : t >= b ? "bad" : t >= w ? "warn" : "ok";
+  const push = (k, v) => { H[k].push(v); if (H[k].length > HIST) H[k].shift(); };
+  const dur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h} h ${m} min` : m ? `${m} min ${s % 60} s` : `${s} s`; };
+  const k = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + " M" : n >= 1e3 ? (n / 1e3).toFixed(1) + " k" : String(n);
+  const gb = (b) => (b / 1e9).toFixed(1) + " GB";
+
+  async function discover() {
+    const out = await cockpit.spawn(["sh", "-c",
+      "for d in /sys/class/drm/card*/device; do [ -f $d/gpu_busy_percent ] && echo $d && ls -d $d/hwmon/hwmon* 2>/dev/null | head -1; done; " +
+      "for h in /sys/class/hwmon/hwmon*; do n=$(cat $h/name 2>/dev/null); case $n in k10temp|zenpower|coretemp) echo CPU:$h;; esac; done; nproc | sed s/^/NCPU:/"], { err: "ignore" });
+    for (const line of out.trim().split("\n")) {
+      if (line.startsWith("CPU:")) cpuhw = line.slice(4);
+      else if (line.startsWith("NCPU:")) ncpu = +line.slice(5) || 1;
+      else if (line.includes("/hwmon/")) hw = line;
+      else if (line.startsWith("/sys/")) dev = line;
+    }
+    if (dev) {
+      powerCap = hw ? await num(hw + "/power1_cap", 1e6) : null;
+      vramTotal = await num(dev + "/mem_info_vram_total", 1e9);
+      $("dev").textContent = `${hw ? await read(hw + "/name") : "gpu"} · ${dev.replace("/device", "")} · ${ncpu} CPU-Threads · alle 2 s`;
+    } else $("dev").textContent = "keine amdgpu gefunden · " + ncpu + " CPU-Threads";
+  }
+
+  async function cpuPct() {
+    const s = await read("/proc/stat"); if (!s) return null;
+    const f = s.split("\n")[0].split(/\s+/).slice(1).map(Number);
+    const idle = f[3] + (f[4] || 0), total = f.reduce((a, b) => a + b, 0);
+    let pct = null;
+    if (lastCpu) { const dt = total - lastCpu.total, di = idle - lastCpu.idle; pct = dt > 0 ? Math.round(100 * (1 - di / dt)) : null; }
+    lastCpu = { total, idle };
+    return pct;
+  }
+
+  async function hardware() {
+    const [busy, used, te, tj, tm, pw, fan, sclk] = dev ? await Promise.all([
+      num(dev + "/gpu_busy_percent"), num(dev + "/mem_info_vram_used", 1e9),
+      hw ? num(hw + "/temp1_input", 1000) : null, hw ? num(hw + "/temp2_input", 1000) : null, hw ? num(hw + "/temp3_input", 1000) : null,
+      hw ? num(hw + "/power1_average", 1e6) : null, hw ? num(hw + "/fan1_input") : null, hw ? num(hw + "/freq1_input", 1e6) : null,
+    ]) : [];
+    const tc = cpuhw ? await num(cpuhw + "/temp1_input", 1000) : null;
+    const la = await read("/proc/loadavg");
+    const mi = await read("/proc/meminfo");
+    const cp = await cpuPct();
+
+    $("busy").textContent = busy == null ? "–" : `${busy} %`;
+    $("busy-sub").textContent = sclk ? `${Math.round(sclk)} MHz` : "";
+    $("busy-bar").style.width = (busy || 0) + "%";
+    $("tj").innerHTML = tj == null ? "–" : `<span class="${cls(tj, 90, 105)}">${tj.toFixed(0)} °C</span>`;
+    $("tj-sub").innerHTML = `Hotspot · Edge ${te == null ? "–" : te.toFixed(0)} °C · <span class="${cls(tm, 95, 105)}">VRAM ${tm == null ? "–" : tm.toFixed(0)} °C</span>`;
+    $("pw").textContent = pw == null ? "–" : `${pw.toFixed(0)} W`;
+    $("pw-sub").textContent = (powerCap ? `Limit ${powerCap.toFixed(0)} W` : "") + (fan != null ? ` · Lüfter ${fan} rpm` : "");
+    $("pw-bar").style.width = (pw && powerCap ? 100 * pw / powerCap : 0) + "%";
+    $("vram").textContent = used == null ? "–" : `${used.toFixed(1)} GB`;
+    $("vram-sub").textContent = vramTotal ? `von ${vramTotal.toFixed(1)} GB` : "";
+    $("vram-bar").style.width = (used && vramTotal ? 100 * used / vramTotal : 0) + "%";
+    $("cpu").innerHTML = (cp != null ? `${cp} %` : "–") + (tc != null ? ` · <span class="${cls(tc, 80, 90)}">${tc.toFixed(0)} °C</span>` : "");
+    $("cpu-sub").textContent = la ? `Load ${la.split(" ").slice(0, 3).join(" / ")} auf ${ncpu} Threads` : "";
+    $("cpu-bar").style.width = (cp || 0) + "%";
+    let ramUsed = null;
+    if (mi) {
+      const kv = {}; mi.split("\n").forEach(l => { const m = l.match(/^(\w+):\s+(\d+)/); if (m) kv[m[1]] = +m[2]; });
+      const tot = kv.MemTotal / 1e6; ramUsed = (kv.MemTotal - kv.MemAvailable) / 1e6;
+      $("ram").textContent = `${ramUsed.toFixed(1)} GB`; $("ram-sub").textContent = `von ${tot.toFixed(1)} GB belegt`;
+      $("ram-bar").style.width = (100 * ramUsed / tot) + "%";
+    }
+    push("busy", busy); push("tj", tj); push("tm", tm); push("tc", tc); push("cpu", cp); push("pw", pw); push("fan", fan == null ? null : fan / 10); push("vram", used == null ? null : used * 10);
+  }
+
+  async function disk() {
+    if (tickN % 15 !== 0 && lastDf) return;       // every 30 s
+    try {
+      const out = await cockpit.spawn(["df", "-B1", "--output=size,avail,target", "/"], { err: "ignore" });
+      const l = out.trim().split("\n").pop().trim().split(/\s+/);
+      const size = +l[0], avail = +l[1], used = size - avail;
+      $("disk").innerHTML = `<span class="${cls(100 * used / size, 85, 95)}">${gb(avail)} frei</span>`;
+      $("disk-sub").textContent = `${gb(used)} von ${gb(size)} belegt`;
+      $("disk-bar").style.width = (100 * used / size) + "%";
+      lastDf = true;
+    } catch (e) {}
+    try {
+      const out = await cockpit.spawn(["sh", "-c", `du -sb ${DATA} 2>/dev/null | cut -f1; ls -d ${DATA}/*/ 2>/dev/null | wc -l; ls ${DATA}/*/clips/*.mp4 2>/dev/null | wc -l`], { err: "ignore" });
+      const [bytes, vods, clips] = out.trim().split("\n");
+      $("data").textContent = gb(+bytes || 0);
+      $("data-sub").textContent = `${vods} VODs · ${clips} Clips · ${DATA}`;
+    } catch (e) {}
+  }
+
+  async function pipeline() {
+    let jobs = await readJson(DATA + "/jobs.json");
+    if (jobs && !Array.isArray(jobs)) jobs = jobs.jobs || Object.values(jobs);
+    jobs = jobs || [];
+    const active = jobs.filter(j => j.status === "running" || j.status === "queued");
+    const job = active[active.length - 1] || jobs[jobs.length - 1];
+    if (!job) { $("job").textContent = "noch kein Job"; return; }
+    const vid = (String(job.vod).match(/(\d{6,})/) || [])[1];
+    const info = vid ? await readJson(`${DATA}/${vid}/info.json`) : null;
+    const m = vid ? await readJson(`${DATA}/${vid}/metrics.json`) : null;
+    const run = vid ? await readJson(`${DATA}/${vid}/run.json`) : null;
+    const now = Date.now() / 1000;
+    const stClass = job.status === "running" ? "warn" : job.status === "done" ? "ok" : job.status === "queued" ? "" : "bad";
+    $("job").innerHTML = `Job <b>${job.id}</b> · <span class="${stClass}">${job.status}</span> · ${info ? `${info.streamer} — ${info.title}` : job.vod} · <a href="http://${location.hostname}:9443/jobs/${job.id}" target="_blank">Job-Seite</a>`;
+    if (!m) { $("stages").innerHTML = ""; return; }
+    const cur = m.stage;
+    $("stages").innerHTML = STAGES.map(s => { const st = m.stages && m.stages[s]; const c = s === cur ? "now" : (st && st.end) ? "done" : "";
+      const d = st ? (st.end ? dur(st.end - st.start) : dur(now - st.start)) : ""; return `<span class="stage ${c}">${s}${d ? " · " + d : ""}</span>`; }).join("");
+    const running = job.status === "running";
+    const elapsed = (running ? now : (m.updated || now)) - (m.started || now);
+    $("p-stage").textContent = (cur || "–");
+    let pct = 0, eta = "";
+    if (run && run.eta_seconds) { const left = Math.max(0, run.eta_seconds - (now - run.started)); pct = Math.min(99, 100 * (now - run.started) / run.eta_seconds); eta = running ? `ETA ≈ ${dur(left)} (gelernte Schätzung)` : ""; }
+    if (cur === "done" || !running) { pct = cur === "done" ? 100 : pct; }
+    $("p-eta").textContent = eta; $("p-bar").style.width = pct + "%";
+    const vodS = run ? run.vod_seconds : null;
+    $("p-time").textContent = vodS ? dur(vodS) : "–";
+    $("p-time-sub").textContent = `Laufzeit ${dur(elapsed)}` + (vodS ? ` · Faktor ${(elapsed / vodS).toFixed(2)}× der Stream-Länge` : "");
+    const l = m.llm || {};
+    $("p-tok").textContent = `${k(l.input_tokens || 0)} → ${k(l.output_tokens || 0)}`;
+    $("p-tok-sub").textContent = `${l.calls || 0} Modell-Calls` + (l.last ? ` · letzter: ${(l.last.model || "").replace("ollama/", "")} ${l.last.prompt_tokens}→${l.last.gen_tokens}, ${l.last.wall_s} s` : "");
+    const last = l.last;
+    if (last && last.gen_tok_s != null) {
+      $("p-toks").innerHTML = `<span class="${cls(-last.gen_tok_s, -15, -6)}">${last.gen_tok_s}</span>`;
+      $("p-toks-sub").textContent = `Ø ${l.gen_tok_s_avg ?? "–"} tok/s Generierung` + (last.prefill_tok_s ? ` · Prefill ${last.prefill_tok_s} tok/s` : "") + " · GPU-Referenz ≥ 20";
+    } else { $("p-toks").textContent = "–"; $("p-toks-sub").textContent = "noch kein Modell-Call"; }
+    const w = m.whisper || {};
+    if (w.chunks_total) { $("p-wh").innerHTML = `${w.chunks_done}/${w.chunks_total}` + (w.factor != null ? ` · <span class="${cls(-w.factor, -10, -2)}">${w.factor}× RT</span>` : ""); $("p-wh-sub").textContent = `${w.backend || ""} ${w.model || ""}`; }
+    else { $("p-wh").textContent = "–"; $("p-wh-sub").textContent = w.backend ? `${w.backend} ${w.model}` : "Transkript aus Cache oder wartet"; }
+    const v = m.vision || {};
+    if (v.frames != null) { $("p-vis").textContent = `${v.scored ?? 0}/${v.frames}`; $("p-vis-sub").textContent = `Frames · ${v.hot ?? 0} heiß · ${v.triage_batches ?? "?"} Calls` + (v.bursts != null ? ` · ${v.confirmed}/${v.bursts} Bursts` : ""); }
+    else { $("p-vis").textContent = "–"; $("p-vis-sub").textContent = "läuft oder wartet"; }
+    const r = m.render || {};
+    $("p-clips").textContent = r.total ? `${r.done}/${r.total}` : "–";
+    $("p-clips-sub").textContent = `$${(l.usd || 0).toFixed(2)} API-Kosten` + (vid ? ` · VOD ${vid}` : "");
+    if (tickN % 5 === 0) {           // every 10 s
+      push("gen", last ? last.gen_tok_s : null); push("pre", last && last.prefill_tok_s ? last.prefill_tok_s / 10 : null); push("wh", w.factor ?? null);
+    }
+    const tb = $("models"); const bm = l.by_model || {};
+    tb.innerHTML = Object.keys(bm).length ? Object.entries(bm).map(([n, x]) => `<tr><td>${n}</td><td>${x.calls}</td><td>${k(x.input_tokens)}</td><td>${k(x.output_tokens)}</td></tr>`).join("") : `<tr><td colspan="4" class="small">–</td></tr>`;
+  }
+
+  async function ollama() {
+    try {
+      const txt = await cockpit.http(11434).get("/api/ps");
+      const d = JSON.parse(txt); const g = (d.models || [])[0];
+      if (g) { const pct = g.size ? Math.round(100 * (g.size_vram || 0) / g.size) : null;
+        $("p-ol").innerHTML = `${g.name} · <span class="${cls(-(pct ?? 0), -99, -60)}">${pct ?? "?"} % GPU</span>`;
+        $("p-ol-sub").textContent = `${(g.size_vram / 1e9).toFixed(1)} GB VRAM · Kontext ${g.context_length ?? "?"}` + (d.models.length > 1 ? ` · +${d.models.length - 1}` : ""); }
+      else { $("p-ol").textContent = "leer"; $("p-ol-sub").textContent = "kein Modell geladen"; }
+    } catch (e) { $("p-ol").textContent = "–"; $("p-ol-sub").textContent = "Ollama :11434 nicht erreichbar"; }
+  }
+
+  function draw(cv, series, lo, hi) {
+    const dpr = window.devicePixelRatio || 1; const W = cv.width = cv.clientWidth * dpr, Hh = cv.height = 130 * dpr;
+    const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, W, Hh);
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--line"); ctx.lineWidth = 1;
+    for (const f of [0.25, 0.5, 0.75]) { ctx.beginPath(); ctx.moveTo(0, Hh * f); ctx.lineTo(W, Hh * f); ctx.stroke(); }
+    for (const [data, color] of series) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2 * dpr; ctx.beginPath(); let started = false;
+      data.forEach((v, i) => { if (v == null) { started = false; return; }
+        const x = W * i / (HIST - 1), y = Hh - Hh * (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); });
+      ctx.stroke();
+    }
+  }
+
+  async function tick() {
+    try {
+      if (!dev && !cpuhw) await discover();
+      await Promise.all([hardware(), pipeline(), ollama(), disk()]);
+      draw($("c1"), [[H.busy, "#73bcf7"], [H.tj, "#f0ab00"], [H.tm, "#c9190b"], [H.tc, "#3e8635"], [H.cpu, "#a18fff"]], 0, 110);
+      draw($("c2"), [[H.pw, "#73bcf7"], [H.fan, "#a18fff"], [H.vram, "#3e8635"]], 0, Math.max(powerCap || 300, 350));
+      draw($("c3"), [[H.gen, "#73bcf7"], [H.pre, "#f0ab00"], [H.wh, "#3e8635"]], 0, 120);
+      $("err").textContent = "";
+    } catch (e) { $("err").textContent = " Fehler: " + (e.message || e); }
+    tickN++;
+    setTimeout(tick, 2000);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

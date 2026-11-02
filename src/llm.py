@@ -21,8 +21,8 @@ Config (all optional; defaults reproduce prod):
     ollama:
       base_url: http://ollama:11434
       text_model: qwen3:14b
-      vision_model: qwen3-vl:8b
-      num_ctx: {text: 32768, vision: 8192}
+      vision_model: qwen3-vl:8b-instruct
+      num_ctx: {text: 32768, vision: 32768}
       timeout_seconds: 600
 """
 from __future__ import annotations
@@ -44,7 +44,9 @@ PROVIDER_OLLAMA = "ollama"
 _OLLAMA_DEFAULTS = {
     "base_url": "http://ollama:11434",
     "text_model": "qwen3:14b",
-    "vision_model": "qwen3-vl:8b",
+    # qwen3-vl:8b (no suffix) is the THINKING variant in Ollama and ignores think:false;
+    # its reasoning eats num_predict and truncates the JSON. Always use -instruct.
+    "vision_model": "qwen3-vl:8b-instruct",
     "num_ctx": {"text": 32768, "vision": 32768},
     "timeout_seconds": 600,
 }
@@ -339,7 +341,11 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
                        gen_s=(data.get("eval_duration") or 0) / 1e9 or None,
                        usd=getattr(meter, "usd", None) if meter is not None else None)
 
-        text = (data.get("message") or {}).get("content") or ""
+        msg_obj = data.get("message") or {}
+        text = msg_obj.get("content") or ""
+        thinking = msg_obj.get("thinking") or ""
+        if thinking:
+            _warn_thinking(model, len(thinking), len(text), log)
         try:
             obj = json.loads(text)
         except json.JSONDecodeError as e:
@@ -352,6 +358,25 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
             continue
         return obj
     raise LLMError(f"ollama/{model}: {last_err}")
+
+
+_thinking_warned: set[str] = set()
+
+
+def _warn_thinking(model: str, think_chars: int, content_chars: int, log) -> None:
+    """Once per model: the model produced a thinking block despite think=false.
+
+    Ollama's "thinking" model variants (e.g. qwen3-vl:8b, renderer qwen3-vl-thinking)
+    reason anyway; the reasoning counts against num_predict and silently truncates
+    the structured answer. The fix is the -instruct tag, not a bigger limit.
+    """
+    with _first_call_lock:
+        if model in _thinking_warned:
+            return
+        _thinking_warned.add(model)
+    log(f"[yellow]llm: {model} returned {think_chars} chars of thinking next to {content_chars} chars "
+        "of answer although think=false — this is a thinking model variant; switch "
+        "llm.ollama.*_model to its -instruct tag or the JSON will get cut off")
 
 
 def _log_speed(data: dict, model: str, wall: float, est: int, log) -> None:
