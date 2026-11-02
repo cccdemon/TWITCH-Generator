@@ -76,6 +76,10 @@ class LLMError(RuntimeError):
     """A provider returned no usable structured object."""
 
 
+class _EmptyAnswer(LLMError):
+    """Reasoning model stopped after its thinking block without an answer."""
+
+
 @dataclass
 class _Usage:
     """Duck-types anthropic's Usage for pricing.CostMeter.add."""
@@ -308,7 +312,12 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
     }
 
     last_err: Exception | None = None
-    for attempt in range(2):  # one retry on malformed JSON / transient HTTP error
+    attempts = 3  # malformed JSON / transient HTTP error / reasoning model that stopped after thinking
+    for attempt in range(attempts):
+        if attempt > 0 and isinstance(last_err, _EmptyAnswer):
+            # reasoning models (gpt-oss) occasionally end after the thinking block
+            # with no content; a short nudge reliably makes them emit the object.
+            body["messages"] = messages + [{"role": "user", "content": "Reply now with the JSON object only."}]
         t0 = time.time()
         try:
             with httpx.Client(timeout=httpx.Timeout(timeout, connect=30.0)) as client:
@@ -328,7 +337,7 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
                     body = f" — server said: {resp_obj.text[:300]}"
                 except Exception:  # noqa: BLE001
                     body = ""
-            log(f"[yellow]llm: ollama request failed ({type(e).__name__}: {e}){body} — attempt {attempt + 1}/2")
+            log(f"[yellow]llm: ollama request failed ({type(e).__name__}: {e}){body} — attempt {attempt + 1}/{attempts}")
             if resp_obj is not None and resp_obj.status_code == 400:
                 # a 400 is deterministic (context overflow, bad schema) — retrying is pointless
                 last_err = LLMError(f"ollama/{model} 400: {resp_obj.text[:300]}")
@@ -354,11 +363,16 @@ def _ollama(*, role: str, system: str | None, content: list[Part], schema: dict,
         thinking = msg_obj.get("thinking") or ""
         if thinking and think in (False, None, "false"):
             _warn_thinking(model, len(thinking), len(text), log)
+        if not text.strip():
+            last_err = _EmptyAnswer(f"empty answer after {len(thinking)} chars of thinking")
+            log(f"[yellow]llm: ollama returned an empty answer ({len(thinking)} chars thinking, "
+                f"done_reason={data.get('done_reason')}) — attempt {attempt + 1}/{attempts}")
+            continue
         try:
             obj = json.loads(text)
         except json.JSONDecodeError as e:
             last_err = e
-            log(f"[yellow]llm: ollama returned non-JSON ({e}) — attempt {attempt + 1}/2; "
+            log(f"[yellow]llm: ollama returned non-JSON ({e}) — attempt {attempt + 1}/{attempts}; "
                 f"head={text[:120]!r}")
             continue
         if not isinstance(obj, dict):

@@ -100,24 +100,34 @@ def analyze(
     )
 
     found: list[Moment] = []
-    for chunk in _chunks(segments):
-        data = llm.structured(
-            role="text",
-            model=model,
-            max_tokens=2048,
-            system=system,
-            content=[TextPart(
-                "Transcript chunk (timestamps in seconds):\n\n"
-                + _render(chunk)
-                + "\n\nReport the strongest moments via report_moments."
-            )],
-            schema=_MOMENT_TOOL["input_schema"],
-            tool_name=_MOMENT_TOOL["name"],
-            tool_description=_MOMENT_TOOL["description"],
-            cfg=cfg,
-            meter=meter,
-            log=log,
-        )
+    chunks = _chunks(segments)
+    failed = 0
+    for i, chunk in enumerate(chunks):
+        try:
+            data = llm.structured(
+                role="text",
+                model=model,
+                max_tokens=2048,
+                system=system,
+                content=[TextPart(
+                    "Transcript chunk (timestamps in seconds):\n\n"
+                    + _render(chunk)
+                    + "\n\nReport the strongest moments via report_moments."
+                )],
+                schema=_MOMENT_TOOL["input_schema"],
+                tool_name=_MOMENT_TOOL["name"],
+                tool_description=_MOMENT_TOOL["description"],
+                cfg=cfg,
+                meter=meter,
+                log=log,
+            )
+        except llm.LLMError as e:
+            # One bad chunk must not kill the run: the other signals still cover it.
+            failed += 1
+            log(f"[yellow]analyze: chunk {i + 1}/{len(chunks)} skipped ({e})")
+            if failed > max(2, len(chunks) // 3):
+                raise
+            continue
         found.extend(_parse(data, categories, min_clip_seconds, max_clip_seconds))
 
     found.sort(key=lambda m: m.score, reverse=True)
