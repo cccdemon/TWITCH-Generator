@@ -19,6 +19,11 @@ SETTING_KEYS: list[tuple[str, str, bool]] = [
     ("TWITCH_CLIENT_SECRET", "Twitch Client Secret", True),
     ("TIKTOK_CLIENT_KEY", "TikTok Client Key", True),
     ("TIKTOK_CLIENT_SECRET", "TikTok Client Secret", True),
+    ("POSTER_URL", "Handy-Dienst URL (z. B. http://192.168.178.x:3300)", False),
+    ("POSTER_TOKEN", "Handy-Dienst Token", True),
+    ("POST_TWITCH_URL", "Twitch-Link für Posts", False),
+    ("POST_HASHTAGS", "Feste Hashtags", False),
+    ("POST_TEMPLATE", "Post-Textvorlage ({title} {twitch} {hashtags})", False),
 ]
 
 _KEYS = {k for k, _, _ in SETTING_KEYS}

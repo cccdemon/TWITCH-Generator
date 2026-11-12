@@ -78,6 +78,39 @@ def check_caption(caption: str) -> dict:
     return res
 
 
+_HASHTAG_SCHEMA = {
+    "type": "object",
+    "properties": {"hashtags": {"type": "array", "items": {"type": "string"}, "maxItems": 5}},
+    "required": ["hashtags"],
+}
+_HASHTAG_SYSTEM = (
+    "Du schlägst Hashtags für einen kurzen Gaming-Clip (TikTok/Instagram Reels) vor. "
+    "Gib 3 bis 5 passende, gängige Hashtags zurück, die zum Inhalt dieses Clips passen. "
+    "Keine Hashtags wiederholen, die schon in der festen Liste stehen. Nur das Wort, ohne Erklärung."
+)
+
+
+def suggest_hashtags(title: str, category: str, transcript_excerpt: str, fixed: list[str],
+                     cfg: dict, log=print) -> list[str]:
+    """AI hashtags for one clip. Never raises: any failure → [] (fixed tags still apply)."""
+    from . import llm, pricing
+
+    try:
+        meter = pricing.CostMeter()
+        text = (f"Titel: {title}\nKategorie: {category}\nFeste Hashtags: {' '.join(fixed)}\n"
+                f"Gesprochenes im Clip:\n{transcript_excerpt[:1500]}")
+        out = llm.structured(
+            role="text", system=_HASHTAG_SYSTEM, content=[llm.TextPart(text)],
+            schema=_HASHTAG_SCHEMA, tool_name="hashtags", cfg=cfg, meter=meter,
+            max_tokens=300, model=(cfg.get("refine") or {}).get("model"), log=log,
+        )
+        log(f"posting: hashtags for {title!r} (${meter.usd:.4f})")
+        return normalize_tags(out.get("hashtags") or [])[:5]
+    except Exception as e:  # noqa: BLE001 — a hashtag hint must never block posting
+        log(f"posting: hashtag suggestion failed: {e}")
+        return []
+
+
 # -------------------------------------------------------------------- clips
 def clip_kind(name: str, moments: dict[int, dict]) -> str:
     """"pipeline" if the clip maps to a moment (leading start second), else "edit"."""

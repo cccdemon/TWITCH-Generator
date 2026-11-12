@@ -107,6 +107,8 @@
           </label>
           {% if s.secret %}
             <input type="password" name="{{ s.key }}" placeholder="{{ '•••• (leave blank to keep)' if s.is_set else 'enter value' }}">
+          {% elif s.key in ('POST_TEMPLATE', 'POST_HASHTAGS') %}
+            <textarea name="{{ s.key }}" rows="3" style="width:100%">{{ s.value }}</textarea>
           {% else %}
             <input type="text" name="{{ s.key }}" value="{{ s.value }}">
           {% endif %}

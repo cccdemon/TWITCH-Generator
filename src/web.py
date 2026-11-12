@@ -38,7 +38,9 @@ from .jobs import manager
 from .models import TranscriptSegment
 
 # What to keep when "freeing" a VOD (delete the heavy source, keep the output).
-_FREE_KEEP = {"clips", "moments.json", "cost.json", "info.json"}
+_FREE_KEEP = {"clips", "moments.json", "cost.json", "info.json",
+              # small files the posting panel still needs (signals, snapping, AI tags, post state)
+              "posts.json", "transcript.json", "audio.json", "chat.json", "facecam.json"}
 from .settings_store import (
     SETTING_KEYS,
     apply_settings,
@@ -232,6 +234,9 @@ def _load_users() -> dict[str, str]:
 
 
 app = FastAPI(title="TWITCH-Generator", docs_url=None, redoc_url=None)
+
+from . import posting_web  # noqa: E402 — needs the helpers defined above
+app.include_router(posting_web.router)
 
 
 @app.on_event("startup")
