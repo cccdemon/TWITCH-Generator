@@ -197,3 +197,14 @@ def test_settings_have_poster_keys():
     keys = {k: secret for k, _, secret in SETTING_KEYS}
     assert keys["POSTER_TOKEN"] is True and keys["POSTER_URL"] is False
     assert {"POST_TWITCH_URL", "POST_HASHTAGS", "POST_TEMPLATE"} <= set(keys)
+
+
+def test_clips_page_has_post_panel_and_free_warning(client, vod):
+    (vod / "555.mp4").write_bytes(b"S" * 300_000)
+    posting.PostStore(vod).add_post(CLIP, {"id": 1, "status": "done", "platforms": ["tiktok"]})
+    html = client.get("/clips/555").text
+    assert 'data-posting="1"' in html
+    assert f'data-post-status="done"' in html
+    (vod / "clips" / "200_funny_y.mp4").write_bytes(b"x")
+    html = client.get("/clips/555").text
+    assert "nur noch gekürzt" in html

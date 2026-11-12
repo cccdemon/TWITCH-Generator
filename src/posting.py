@@ -99,10 +99,13 @@ def suggest_hashtags(title: str, category: str, transcript_excerpt: str, fixed: 
         meter = pricing.CostMeter()
         text = (f"Titel: {title}\nKategorie: {category}\nFeste Hashtags: {' '.join(fixed)}\n"
                 f"Gesprochenes im Clip:\n{transcript_excerpt[:1500]}")
+        # "analyze" role: on the local box that is the fast non-reasoning model
+        # (qwen3:14b); "text"/"refine" would be gpt-oss with a 12k reasoning budget,
+        # i.e. a minute of waiting every time the post panel opens.
         out = llm.structured(
-            role="text", system=_HASHTAG_SYSTEM, content=[llm.TextPart(text)],
+            role="analyze", system=_HASHTAG_SYSTEM, content=[llm.TextPart(text)],
             schema=_HASHTAG_SCHEMA, tool_name="hashtags", cfg=cfg, meter=meter,
-            max_tokens=300, model=(cfg.get("refine") or {}).get("model"), log=log,
+            max_tokens=300, model=(cfg.get("analyze") or {}).get("model"), log=log,
         )
         log(f"posting: hashtags for {title!r} (${meter.usd:.4f})")
         return normalize_tags(out.get("hashtags") or [])[:5]
@@ -223,6 +226,11 @@ def window(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict) -> dic
         lo = max(0.0, start - MARGIN_S)
         hi = end + MARGIN_S
         dur = _vod_duration(vod_dir)
+        if not dur:  # info.json from twitch.py carries no duration
+            try:
+                dur = clip_stage.probe_duration(_source(vod_dir))
+            except Exception:  # noqa: BLE001 — unclamped is still usable
+                dur = None
         if dur:
             hi = min(hi, dur)
         return {"kind": kind, "mode": "source", "source": True, "start": start, "end": end,

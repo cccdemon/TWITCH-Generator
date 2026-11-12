@@ -28,6 +28,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import clip as clip_stage
 from . import oauth
+from . import poster_client
+from . import posting
 from . import pricing
 from . import sysmon
 from . import timing
@@ -553,6 +555,12 @@ def clips_vod(request: Request, vod_id: str, msg: str | None = None, _: str = De
         raise HTTPException(404, "no such vod")
     clips = _clips_detail(vod_id)  # may be empty (auto_render off → build in editor)
     cost = pricing.load_cost(data_dir() / vod_id / "cost.json")
+    posts = posting.PostStore(vdir).all()
+    post_state = {}
+    for c in clips:
+        recs = (posts.get(c["name"]) or {}).get("posts") or []
+        post_state[c["name"]] = recs[-1].get("status", "") if recs else ""
+    unposted = any(s != "done" for s in post_state.values())
     return _TEMPLATES.TemplateResponse(
         request, "clips_vod.html",
         {
@@ -561,6 +569,8 @@ def clips_vod(request: Request, vod_id: str, msg: str | None = None, _: str = De
             "usd": cost["usd"] if cost else None,
             "src_mb": _source_mb(data_dir() / vod_id),
             "tiktok": oauth.status("tiktok"),
+            "posting": poster_client.configured(),
+            "post_state": post_state, "unposted": unposted,
         },
     )
 

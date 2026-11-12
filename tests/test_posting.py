@@ -58,3 +58,23 @@ def test_store_roundtrip_and_lock(tmp_path):
     assert is_locked(s.get("c.mp4")) is True
     s.update("c.mp4", posts=[{"id": 7, "status": "done"}])
     assert is_locked(PostStore(tmp_path).get("c.mp4")) is False
+
+
+def test_suggest_hashtags_uses_fast_analyze_role_and_normalizes(monkeypatch):
+    from src import llm, posting
+    seen = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return {"hashtags": ["Space Fail", "#scfail", "x", "y", "z", "w"]}
+
+    monkeypatch.setattr(llm, "structured", fake)
+    tags = posting.suggest_hashtags("Boom", "funny", "text", ["#a"], {"refine": {"model": "m"}}, log=lambda s: None)
+    assert seen["role"] == "analyze"
+    assert tags == ["#SpaceFail", "#scfail", "#x", "#y", "#z"]
+
+
+def test_suggest_hashtags_never_raises(monkeypatch):
+    from src import llm, posting
+    monkeypatch.setattr(llm, "structured", lambda **kw: (_ for _ in ()).throw(RuntimeError("down")))
+    assert posting.suggest_hashtags("B", "", "", [], {}, log=lambda s: None) == []

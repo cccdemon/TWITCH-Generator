@@ -28,9 +28,43 @@
   header form { margin:0; }
   header button { width:auto; background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:400; }
   header button.danger { border-color:#633; color:#fbc; }
+  /* --- phone posting --- */
+  .pbtn { background:#111; border:1px solid var(--line); }
+  .pstate { font-size:11px; }
+  .pstate.done { color:var(--ok); border-color:#2a5; } .pstate.failed, .pstate.partial { color:#f99; border-color:#633; }
+  .pstate.queued, .pstate.running { color:#fc6; border-color:#653; }
+  .clip.open { grid-column:1/-1; display:grid; grid-template-columns:280px 1fr; }
+  .clip.open > video { grid-column:1; grid-row:1; }
+  .clip.open > .body { grid-column:1; grid-row:2; }
+  .clip.open > .post { grid-column:2; grid-row:1 / span 2; }
+  @media (max-width:760px) { .clip.open { display:flex; flex-direction:column; } }
+  .post { border-left:1px solid var(--line); padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .post h4 { margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); }
+  .post .pv { width:100%; max-height:360px; background:#000; border-radius:8px; }
+  .tl { position:relative; height:48px; background:#24242e; border-radius:6px; touch-action:none; user-select:none; cursor:pointer; }
+  .tl .orig { position:absolute; top:0; bottom:0; border:1px dashed #556; border-radius:6px; pointer-events:none; }
+  .tl .sel { position:absolute; top:0; bottom:0; background:rgba(62,207,142,.28); border-top:2px solid var(--ok); border-bottom:2px solid var(--ok); pointer-events:none; }
+  .tl .h { position:absolute; top:-4px; bottom:-4px; width:14px; margin-left:-7px; background:#fc3; border-radius:4px; cursor:ew-resize; touch-action:none; }
+  .tl .h::after { content:""; position:absolute; left:6px; top:12px; bottom:12px; width:2px; background:#653; }
+  .tl .ph { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; }
+  .sig { width:100%; height:26px; display:block; }
+  .tinfo { display:flex; justify-content:space-between; font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .post textarea { width:100%; box-sizing:border-box; min-height:110px; background:#111; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px; font:13px/1.4 system-ui,sans-serif; }
+  .cnt { font-size:12px; color:var(--mut); } .cnt b.bad { color:#f77; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; font-size:13px; }
+  .row label { display:flex; gap:5px; align-items:center; }
+  .row button { width:auto; }
+  .post button.sec { background:transparent; border:1px solid var(--line); color:var(--fg); font-weight:400; }
+  .post button:disabled { opacity:.45; cursor:not-allowed; }
+  .perr { color:#f99; font-size:13px; } .pnote { color:var(--mut); font-size:12px; }
+  .plist { display:flex; flex-direction:column; gap:8px; }
+  .pitem { border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; display:flex; flex-direction:column; gap:4px; }
+  .pitem.old { opacity:.7; font-size:12px; }
+  .pitem img { height:120px; border-radius:6px; border:1px solid var(--line); }
+  input[type=datetime-local] { background:#111; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
 </style>
 </head>
-<body>
+<body data-posting="{{ 1 if posting else 0 }}">
 <header>
   <a href="{{ base }}/clips">← all videos</a>
   <h1>{{ label or ("VOD " ~ vod) }}</h1>
@@ -38,10 +72,11 @@
   <span class="muted"><span id="count">{{ clips|length }}</span> clip(s){% if usd is not none %} · ${{ "%.2f"|format(usd) }} Claude{% endif %}{% if src_mb %} · source {{ src_mb }} MB{% endif %}</span>
   <span id="progress" class="badge" style="display:none">⏳ in progress — clips appear as they render</span>
   <span style="flex:1"></span>
+  <span id="phone" class="badge" title="Handy-Dienst (clip-poster)">📱 …</span>
   <a href="{{ base }}/edit/{{ vod }}"><button type="button">✂ Editor</button></a>
   <a href="{{ base }}/facecam/{{ vod }}"><button type="button">Facecam</button></a>
   {% if src_mb %}
-  <form method="post" action="{{ base }}/vods/{{ vod }}/free" onsubmit="return confirm('Delete the {{ src_mb }} MB source video + intermediates? Clips are kept.')">
+  <form method="post" action="{{ base }}/vods/{{ vod }}/free" onsubmit="return confirm('Delete the {{ src_mb }} MB source video + intermediates? Clips are kept.{% if unposted %} Danach können Clips nur noch gekürzt, nicht mehr verlängert werden.{% endif %}')">
     <button type="submit">Free {{ src_mb }} MB</button></form>
   {% endif %}
   <form method="post" action="{{ base }}/vods/{{ vod }}/delete" onsubmit="return confirm('Delete EVERYTHING for VOD {{ vod }}, including these clips? This cannot be undone.')">
@@ -52,7 +87,7 @@
   {% if not clips %}<p class="muted" id="empty">No clips rendered yet — open the <a href="{{ base }}/edit/{{ vod }}">✂ Editor</a> to cut clips from the detected highlights.</p>{% endif %}
   <div class="grid" id="grid">
     {% for c in clips %}
-    <div class="clip" data-name="{{ c.name }}">
+    <div class="clip" data-name="{{ c.name }}" data-post-status="{{ post_state.get(c.name, '') }}">
       <video controls preload="metadata" src="{{ base }}/clips/{{ vod }}/{{ c.name }}"></video>
       <div class="body">
         <span class="title">{{ c.title }}</span>
@@ -90,6 +125,7 @@ function card(c) {
     `<div class="dl"><a href="${src}" download="${c.name}"><button type="button">Download</button></a>`+
     (TIKTOK ? `<form method="post" action="${src}/tiktok" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='uploading…'"><button type="submit" class="tt">▶ TikTok</button></form>` : '')+
     `</div></div>`;
+  addPost(el);
   return el;
 }
 async function refresh() {
@@ -105,7 +141,341 @@ async function refresh() {
     if (busy) setTimeout(refresh, 3000);
   } catch (e) {}
 }
+// ---------------------------------------------------------------- phone posting
+const POSTING = document.body.dataset.posting === "1";
+const ST_LABEL = {queued: "geplant", running: "läuft", done: "gepostet", partial: "teilweise",
+                  failed: "fehlgeschlagen", cancelled: "abgebrochen"};
+const LIMITS = {instagram: {chars: 2200, tags: 30}, tiktok: {chars: 4000, tags: null}};
+const LINK_RX = /(?:https?:\/\/|www\.)\S+|\b[\w-]+\.(?:tv|com|de|gg|net|org|io)(?:\/\S*)?/g;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+function lsGet(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function clock(ts) { return new Date(ts * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit"}); }
+function tfmt(s, long) {
+  s = Math.max(0, s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const ss = sec.toFixed(1).replace(".", ",").padStart(4, "0");
+  return (long || h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + ":" + ss;
+}
+async function api(method, url, body) {
+  const r = await fetch(BASE + url, {method, headers: body ? {"Content-Type": "application/json"} : {},
+                                     body: body ? JSON.stringify(body) : undefined});
+  let j = null; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((j && j.detail) || `HTTP ${r.status}`);
+  return j;
+}
+
+async function phoneStatus() {
+  const el = document.getElementById("phone");
+  try {
+    const s = await api("GET", "/api/poster/status");
+    if (!s.configured) { el.innerHTML = `📱 Handy: <a href="${BASE}/">in den Settings eintragen</a>`; return; }
+    if (!s.online) { el.textContent = "📱 Handy offline"; el.title = s.error || "Handy nicht erreichbar"; }
+    else {
+      let t = `📱 Handy online`;
+      if (s.battery !== null && s.battery !== undefined) t += ` · ${s.battery} %`;
+      if (s.queued) t += ` · ${s.queued} geplant`;
+      if (s.next_run) t += ` · nächster ${clock(s.next_run)}`;
+      if (s.busy) t += ` · postet gerade`;
+      el.textContent = t; el.title = "";
+    }
+  } catch (e) { el.textContent = "📱 ?"; }
+  setTimeout(phoneStatus, 15000);
+}
+
+function addPost(card) {
+  if (card.querySelector(".pbtn")) return;
+  const name = card.dataset.name, st = card.dataset.postStatus || "";
+  const dl = card.querySelector(".dl");
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "pbtn"; b.textContent = "📱 Posten";
+  if (!POSTING) { b.disabled = true; b.title = "Handy-Dienst in den Settings eintragen"; }
+  b.onclick = () => togglePanel(card);
+  dl.appendChild(b);
+  if (st) {
+    const badge = document.createElement("span");
+    badge.className = `badge pstate ${st}`; badge.textContent = ST_LABEL[st] || st;
+    card.querySelector(".title").after(badge);
+  }
+}
+
+function togglePanel(card) {
+  const open = card.querySelector(".post");
+  if (open) { open.remove(); card.classList.remove("open"); return; }
+  const p = document.createElement("div");
+  p.className = "post"; p.innerHTML = `<span class="pnote">lädt … (KI-Hashtags beim ersten Öffnen)</span>`;
+  card.appendChild(p); card.classList.add("open");
+  p.scrollIntoView({behavior: "smooth", block: "nearest"});
+  loadPanel(card, p);
+}
+
+async function loadPanel(card, p) {
+  const name = card.dataset.name, url = `/api/post/${VOD}/${encodeURIComponent(name)}`;
+  let d;
+  try { d = await api("GET", url); } catch (e) { p.innerHTML = `<span class="perr">${esc(e.message)}</span>`; return; }
+  const S = {card, p, name, url, w: d.window, inT: d.window.start, outT: d.window.end,
+             cuts: [], audio: [], chat: [], posts: d.posts, locked: d.locked, proxy: false, busy: false};
+  p.innerHTML = `
+    <h4>Schnitt</h4>
+    <video class="pv" playsinline preload="metadata"></video>
+    <div class="row"><button type="button" class="sec" data-a="play">▶ Vorschau In→Out</button>
+      <label><input type="checkbox" data-a="snap" checked> an Sätzen einrasten</label>
+      <span class="pnote" data-a="pvnote"></span></div>
+    <div class="tl"><div class="orig"></div><div class="sel"></div><div class="h" data-h="in"></div><div class="h" data-h="out"></div><div class="ph"></div></div>
+    <canvas class="sig" height="26"></canvas>
+    <div class="tinfo"><span data-a="tmin"></span><span data-a="tcur"></span><span data-a="tmax"></span></div>
+    <div class="row"><button type="button" data-a="render">🎬 Fertigen Clip rendern</button>
+      <button type="button" class="sec" data-a="reset">Zurücksetzen</button><span class="pnote" data-a="rnote"></span></div>
+    <h4>Text</h4>
+    <textarea data-a="cap"></textarea>
+    <div class="row"><span class="cnt" data-a="cnt"></span><span style="flex:1"></span>
+      <button type="button" class="sec" data-a="tags">KI-Tags neu</button></div>
+    <h4>Plattform &amp; Zeit</h4>
+    <div class="row">
+      <label><input type="checkbox" data-p="tiktok"> TikTok</label>
+      <label><input type="checkbox" data-p="instagram"> Instagram</label>
+      <label><input type="checkbox" data-a="threads"> Threads</label>
+      <label><input type="checkbox" data-a="dry"> Probelauf</label></div>
+    <div class="row">
+      <label><input type="radio" name="when-${esc(name)}" value="now" checked> sofort</label>
+      <label><input type="radio" name="when-${esc(name)}" value="later"> geplant</label>
+      <input type="datetime-local" data-a="at" disabled></div>
+    <div class="row"><button type="button" data-a="send">📱 An Handy senden</button></div>
+    <span class="perr" data-a="err"></span>
+    <div class="plist" data-a="plist"></div>`;
+  const q = s => p.querySelector(s);
+  S.q = q;
+  q('[data-a="cap"]').value = d.caption;
+  q('[data-a="threads"]').checked = lsGet("tg.threads", true);
+  for (const pl of lsGet("tg.platforms", [])) { const c = q(`[data-p="${pl}"]`); if (c) c.checked = true; }
+
+  // preview source
+  S.pv = q(".pv");
+  if (S.w.mode === "source") {
+    try {
+      let st = (await api("GET", `/proxy/${VOD}/status`)).state;
+      if (st !== "ready" && st !== "building") st = (await api("POST", `/proxy/${VOD}`)).state;
+      S.proxy = st === "ready";
+      if (!S.proxy) q('[data-a="pvnote"]').textContent = "Vorschau-Video wird vorbereitet – bis dahin nur innerhalb des gerenderten Clips";
+    } catch (e) {}
+  }
+  setPreviewSrc(S);
+  S.pv.addEventListener("timeupdate", () => {
+    const t = S.pv.currentTime + pvOffset(S);
+    if (!S.pv.paused && t >= S.outT) S.pv.currentTime = Math.max(0, S.inT - pvOffset(S));
+    drawTl(S, t);
+  });
+
+  // signals
+  api("GET", url + "/signals").then(sg => { S.audio = sg.audio; S.chat = sg.chat; S.cuts = sg.cuts; drawSig(S); }).catch(() => {});
+
+  // timeline drag
+  const tl = q(".tl");
+  const tAt = ev => { const r = tl.getBoundingClientRect(); return S.w.min + Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)) * (S.w.max - S.w.min); };
+  tl.querySelectorAll(".h").forEach(h => {
+    h.addEventListener("pointerdown", ev => { ev.preventDefault(); ev.stopPropagation(); h.setPointerCapture(ev.pointerId); h.dataset.drag = "1"; });
+    h.addEventListener("pointermove", ev => {
+      if (!h.dataset.drag) return;
+      let t = snap(S, tAt(ev));
+      if (h.dataset.h === "in") S.inT = Math.min(t, S.outT - 1); else S.outT = Math.max(t, S.inT + 1);
+      S.inT = Math.max(S.w.min, S.inT); S.outT = Math.min(S.w.max, S.outT);
+      seek(S, h.dataset.h === "in" ? S.inT : Math.max(S.inT, S.outT - 2));
+      update(S);
+    });
+    const end = () => { delete h.dataset.drag; };
+    h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end);
+  });
+  tl.addEventListener("pointerdown", ev => { if (!ev.target.classList.contains("h")) seek(S, tAt(ev)); });
+
+  // buttons
+  q('[data-a="play"]').onclick = () => { seek(S, S.inT); S.pv.play().catch(() => {}); };
+  q('[data-a="render"]').onclick = () => runTrim(S, "/trim", {start: S.inT, end: S.outT});
+  q('[data-a="reset"]').onclick = () => { if (confirm("Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
+  q('[data-a="tags"]').onclick = async () => {
+    const b = q('[data-a="tags"]'); b.disabled = true; b.textContent = "KI denkt …";
+    try { const r = await api("POST", url + "/hashtags"); q('[data-a="cap"]').value = r.caption; update(S); }
+    catch (e) { q('[data-a="err"]').textContent = e.message; }
+    b.disabled = false; b.textContent = "KI-Tags neu";
+  };
+  q('[data-a="cap"]').addEventListener("input", () => update(S));
+  q('[data-a="cap"]').addEventListener("blur", () => api("PUT", url + "/draft", {caption: q('[data-a="cap"]').value}).catch(() => {}));
+  p.querySelectorAll("[data-p], [data-a=threads], [data-a=dry]").forEach(c => c.addEventListener("change", () => {
+    lsSet("tg.platforms", [...p.querySelectorAll("[data-p]:checked")].map(x => x.dataset.p));
+    if (c.dataset.a === "threads") lsSet("tg.threads", c.checked);
+    update(S);
+  }));
+  p.querySelectorAll(`input[type=radio]`).forEach(r => r.addEventListener("change", () => {
+    q('[data-a="at"]').disabled = !p.querySelector('input[value="later"]').checked; update(S);
+  }));
+  q('[data-a="at"]').addEventListener("input", () => update(S));
+  q('[data-a="send"]').onclick = () => send(S);
+  update(S); renderPosts(S);
+}
+
+function pvOffset(S) { return (S.w.mode === "source" && !S.proxy) ? S.w.start : 0; }
+function setPreviewSrc(S) {
+  const clipUrl = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
+  S.pv.src = (S.w.mode === "source" && S.proxy) ? `${BASE}/source/${VOD}` : clipUrl;
+  S.pv.addEventListener("loadedmetadata", () => seek(S, S.inT), {once: true});
+}
+function seek(S, t) {
+  const off = pvOffset(S);
+  let x = t - off;
+  if (S.pv.duration) x = Math.min(x, S.pv.duration - 0.05);
+  try { S.pv.currentTime = Math.max(0, x); } catch (e) {}
+  drawTl(S, t);
+}
+function snap(S, t) {
+  if (!S.q('[data-a="snap"]').checked || !S.cuts.length) return t;
+  let best = t, dist = 1.5;
+  for (const c of S.cuts) if (Math.abs(c - t) < dist) { dist = Math.abs(c - t); best = c; }
+  return best;
+}
+function pct(S, t) { return ((t - S.w.min) / ((S.w.max - S.w.min) || 1) * 100) + "%"; }
+function drawTl(S, cur) {
+  const q = S.q, long = S.w.mode === "source";
+  q(".orig").style.left = pct(S, S.w.start); q(".orig").style.width = `calc(${pct(S, S.w.end)} - ${pct(S, S.w.start)})`;
+  q(".sel").style.left = pct(S, S.inT); q(".sel").style.width = `calc(${pct(S, S.outT)} - ${pct(S, S.inT)})`;
+  q('[data-h="in"]').style.left = pct(S, S.inT); q('[data-h="out"]').style.left = pct(S, S.outT);
+  if (cur !== undefined) q(".ph").style.left = pct(S, Math.min(S.w.max, Math.max(S.w.min, cur)));
+  q('[data-a="tmin"]').textContent = tfmt(S.w.min, long);
+  q('[data-a="tmax"]').textContent = tfmt(S.w.max, long);
+  q('[data-a="tcur"]').textContent = `In ${tfmt(S.inT, long)} · Länge ${tfmt(S.outT - S.inT)} · Out ${tfmt(S.outT, long)}`;
+}
+function drawSig(S) {
+  const cv = S.q(".sig"), w = cv.clientWidth || 600, h = 26;
+  cv.width = w; const g = cv.getContext("2d"); g.clearRect(0, 0, w, h);
+  const span = (S.w.max - S.w.min) || 1;
+  const bar = (sig, color, y0, hh) => { g.fillStyle = color; for (const [t, s] of sig) {
+    const x = (t - S.w.min) / span * w; g.fillRect(x, y0 + hh * (1 - s), Math.max(2, w / 200), hh * s); } };
+  bar(S.audio, "#d8843f", 0, h / 2 - 1); bar(S.chat, "#9146ff", h / 2, h / 2);
+  g.fillStyle = "#666"; for (const c of S.cuts) g.fillRect((c - S.w.min) / span * w, h - 3, 1, 3);
+}
+
+function captionCheck(c) {
+  const chars = c.length, tags = (c.match(/#/g) || []).length, links = (c.match(LINK_RX) || []).length;
+  const ok = {}, err = {};
+  for (const [pl, l] of Object.entries(LIMITS)) {
+    const name = pl === "instagram" ? "Instagram" : "TikTok";
+    if (chars > l.chars) err[pl] = `${name}: Text länger als ${l.chars} Zeichen`;
+    else if (l.tags !== null && tags > l.tags) err[pl] = `${name}: mehr als ${l.tags} Hashtags`;
+    ok[pl] = !err[pl];
+  }
+  return {chars, tags, links, ok, err};
+}
+
+function update(S) {
+  const q = S.q, cap = q('[data-a="cap"]').value, ck = captionCheck(cap);
+  const plats = [...S.p.querySelectorAll("[data-p]:checked")].map(x => x.dataset.p);
+  const ig = plats.includes("instagram");
+  const cls = bad => bad ? ' class="bad"' : "";
+  q('[data-a="cnt"]').innerHTML =
+    `<b${cls(!ck.ok.tiktok)}>TikTok ${ck.chars}/4000</b> · <b${cls(ck.chars > 2200)}>Insta ${ck.chars}/2200</b> · ` +
+    `<b${cls(ck.tags > 30)}>${ck.tags}/30 Hashtags</b> · 🔗 ${ck.links} Link${ck.links === 1 ? "" : "s"}`;
+  q('[data-a="threads"]').disabled = !ig;
+  const dirty = Math.abs(S.inT - S.w.start) > 0.05 || Math.abs(S.outT - S.w.end) > 0.05;
+  const later = S.p.querySelector('input[value="later"]').checked;
+  const errs = plats.filter(p => !ck.ok[p]).map(p => ck.err[p]);
+  let why = "";
+  if (S.locked) why = "Clip ist geplant – zum Ändern erst abbrechen";
+  else if (dirty) why = "erst rendern – gesendet wird nur, was die Vorschau zeigt";
+  else if (!plats.length) why = "Plattform wählen";
+  else if (!cap.trim()) why = "Text fehlt";
+  else if (errs.length) why = errs.join("; ");
+  else if (later && !q('[data-a="at"]').value) why = "Uhrzeit wählen";
+  const send = q('[data-a="send"]');
+  send.disabled = !!why || S.busy || !POSTING;
+  send.textContent = dirty && !S.locked ? "erst rendern" : "📱 An Handy senden";
+  q('[data-a="err"]').textContent = (why && why !== "Plattform wählen" && why !== "Text fehlt") ? why : "";
+  q('[data-a="render"]').disabled = S.locked || S.busy || !dirty;
+  q('[data-a="reset"]').disabled = S.locked || S.busy;
+  q('[data-a="rnote"]').textContent = S.locked ? "erst Post abbrechen" :
+    (S.w.mode === "clip" ? "ohne Original-VOD: nur kürzen" : "");
+  drawTl(S);
+}
+
+async function runTrim(S, path, body) {
+  const q = S.q; S.busy = true; update(S);
+  const b = q('[data-a="render"]'); const old = b.textContent; b.textContent = "rendert …";
+  q('[data-a="err"]').textContent = "";
+  try {
+    const r = await api("POST", S.url + path, body || null);
+    S.w = r.window; S.inT = S.w.start; S.outT = S.w.end;
+    setPreviewSrc(S);
+    const cv = S.card.querySelector(":scope > video");
+    if (cv) cv.src = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
+    api("GET", S.url + "/signals").then(sg => { S.audio = sg.audio; S.chat = sg.chat; S.cuts = sg.cuts; drawSig(S); }).catch(() => {});
+  } catch (e) { q('[data-a="err"]').textContent = e.message; }
+  b.textContent = old; S.busy = false; update(S);
+}
+
+async function send(S) {
+  const q = S.q; S.busy = true; update(S);
+  const plats = [...S.p.querySelectorAll("[data-p]:checked")].map(x => x.dataset.p);
+  const later = S.p.querySelector('input[value="later"]').checked;
+  const body = {caption: q('[data-a="cap"]').value, platforms: plats,
+                threads: plats.includes("instagram") && q('[data-a="threads"]').checked,
+                dry_run: q('[data-a="dry"]').checked,
+                run_at: later ? Date.parse(q('[data-a="at"]').value) / 1000 : 0};
+  try {
+    const d = await api("POST", S.url + "/send", body);
+    S.posts = d.posts; S.locked = d.locked;
+    renderPosts(S); setCardState(S);
+  } catch (e) { q('[data-a="err"]').textContent = e.message; }
+  S.busy = false; update(S);
+}
+
+function setCardState(S) {
+  const last = S.posts[S.posts.length - 1];
+  let b = S.card.querySelector(".pstate");
+  if (!last) return;
+  if (!b) { b = document.createElement("span"); S.card.querySelector(".title").after(b); }
+  b.className = `badge pstate ${last.status}`; b.textContent = ST_LABEL[last.status] || last.status;
+}
+
+function renderPosts(S) {
+  const box = S.q('[data-a="plist"]'); box.innerHTML = "";
+  const posts = [...S.posts].reverse();
+  posts.forEach((rec, i) => {
+    const el = document.createElement("div");
+    el.className = "pitem" + (i ? " old" : "");
+    const st = rec.status || "";
+    let head = `<b class="badge pstate ${esc(st)}">${esc(ST_LABEL[st] || st)}</b> ${esc((rec.platforms || []).join(" + "))}`;
+    if (rec.dry_run) head += ` · Probelauf`;
+    if (st === "queued") head += ` · ${clock(rec.run_at)}`;
+    let html = `<div>${head}</div>`;
+    for (const [pl, r] of Object.entries(rec.results || {}))
+      html += `<div>${r.ok ? "✓" : "✗"} ${esc(pl)}: ${esc(r.msg || "")}</div>`;
+    if (!i && (rec.shots || []).length)
+      html += `<div class="row">` + rec.shots.map(pl => `<a href="${BASE}/api/post/shot/${rec.id}/${pl}" target="_blank"><img loading="lazy" src="${BASE}/api/post/shot/${rec.id}/${pl}" alt="${esc(pl)}"></a>`).join("") + `</div>`;
+    if (!i && st === "queued")
+      html += `<div class="row"><input type="datetime-local" data-r="at"><button type="button" class="sec" data-r="time">Zeit ändern</button>` +
+              `<button type="button" class="sec" data-r="text">Text übernehmen</button><button type="button" class="sec" data-r="cancel">Abbrechen</button></div>`;
+    if (!i && ["failed", "partial", "cancelled"].includes(st))
+      html += `<div class="row"><button type="button" class="sec" data-r="retry">Wiederholen</button></div>`;
+    el.innerHTML = html;
+    const act = async (fn) => { try { const d = await fn(); S.posts = d.posts; S.locked = d.locked; renderPosts(S); setCardState(S); update(S); }
+                               catch (e) { S.q('[data-a="err"]').textContent = e.message; } };
+    const pu = `${S.url}/posts/${rec.id}`;
+    const on = (k, f) => { const b = el.querySelector(`[data-r="${k}"]`); if (b) b.onclick = () => act(f); };
+    on("cancel", () => api("POST", pu + "/cancel"));
+    on("retry", () => api("POST", pu + "/retry"));
+    on("text", () => api("PATCH", pu, {caption: S.q('[data-a="cap"]').value}));
+    on("time", () => { const v = el.querySelector('[data-r="at"]').value; if (!v) throw new Error("Uhrzeit wählen");
+                       return api("PATCH", pu, {run_at: Date.parse(v) / 1000}); });
+    box.appendChild(el);
+  });
+  clearTimeout(S.poll);
+  if (S.posts.some(r => r.status === "queued" || r.status === "running"))
+    S.poll = setTimeout(async () => {
+      if (!S.p.isConnected) return;
+      try { const d = await api("GET", S.url); S.posts = d.posts; S.locked = d.locked; renderPosts(S); setCardState(S); update(S); }
+      catch (e) { S.poll = setTimeout(() => renderPosts(S), 5000); }
+    }, 5000);
+}
+
+document.querySelectorAll('#grid .clip').forEach(addPost);
 refresh();
+phoneStatus();
 </script>
 </body>
 </html>
