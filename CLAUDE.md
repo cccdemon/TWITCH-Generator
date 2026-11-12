@@ -9,7 +9,7 @@ Twitch VOD → short-form clips. Python 3.11, runs as one Docker container. Two 
 - `web` (default CMD) — FastAPI UI on `:9443` (`src/web.py`), per-user login, job queue.
 - `run --vod <url|id> [--no-upload] [--config path]` — one-shot CLI pipeline (`src/main.py:run_pipeline`).
 
-No test suite, no linter config. Verification = run the pipeline on a VOD and inspect `data/<vod_id>/` (`candidates.json` vs `moments.json` shows what refine kept). Pure logic (`signals`, `chat`, `audio`, `score`, `refine`) imports without ffmpeg or Whisper and can be exercised with plain Python plus `pyyaml`/`anthropic` installed.
+Tests cover only the phone-posting code: `pip install -r requirements-dev.txt`, then `python -m pytest tests -q` (single test: `python -m pytest tests/test_posting_web.py::test_send_records_post_and_locks_trim`). `tests/conftest.py` points `TG_DATA_DIR` at a temp dir and sets `USERS=t:t` before `src.web` is imported; ffmpeg calls are monkeypatched, so the suite runs without ffmpeg. No linter config. Pipeline verification = run the pipeline on a VOD and inspect `data/<vod_id>/` (`candidates.json` vs `moments.json` shows what refine kept). Pure logic (`signals`, `chat`, `audio`, `score`, `refine`) imports without ffmpeg or Whisper and can be exercised with plain Python plus `pyyaml`/`anthropic` installed.
 
 ## Commands
 
@@ -64,6 +64,17 @@ Shared dataclasses live in `src/models.py` (`TranscriptSegment`, `VodInfo`, `Vis
 - All three platforms authenticate via the web UI: `/oauth/{platform}/start|callback`, tokens in `data/oauth.json`, refreshed on use by `oauth.token_for`. App credentials come from env (`YOUTUBE_CLIENT_ID/SECRET`, `TIKTOK_CLIENT_KEY/SECRET`, `FACEBOOK_APP_ID/SECRET`); `oauth.configured()` also requires `PUBLIC_URL`, since the redirect URI is `<PUBLIC_URL>/oauth/<platform>/callback`. There is no CLI consent flow anymore.
 - TikTok has two modes in `upload.tiktok.mode`: `draft` (inbox upload, works without app audit) and `direct` (Direct Post, `SELF_ONLY` unless audited). `upload.tiktok_send` is also called per clip from `POST /clips/{vod_id}/{filename}/tiktok`.
 - Instagram needs a public video URL (Graph API), so it only works when the clip is hosted somewhere reachable.
+
+### Posting through the phone (src/posting.py, src/poster_client.py, src/posting_web.py, poster/)
+
+The working path to TikTok/Instagram is a real phone driven over adb by the separate **clip-poster** service (`poster/`, FastAPI on the phone host, port 3300, bearer `POSTER_TOKEN`, own queue, `dry_run` = everything but the final tap). The generator only talks to it over HTTP:
+
+- `poster_client.py`: one function per poster endpoint; `POSTER_URL`/`POSTER_TOKEN` read from env per call (Settings page), every failure → `PosterError`. The browser never sees the token: all calls go through `posting_web.py` routes under `/api/post/...` and `/api/poster/status`.
+- Clips page (`clips_vod.html`, inline JS) → per clip „📱 Posten“ panel: timeline with drag handles (±20 s `MARGIN_S` beyond the cut, audio/chat bars, snap to transcript segment edges), preview, caption suggestion (`POST_TEMPLATE` with `{title}` `{twitch}` `{hashtags}`, fixed `POST_HASHTAGS` + AI tags from `posting.suggest_hashtags` on the **analyze** role, cached), TikTok/Instagram/Threads, now or scheduled, post list with phone screenshots.
+- Per-clip state in `data/<vod>/posts.json` (`PostStore`): trim, caption draft, AI tags, poster post ids + last known status (refreshed from the poster while queued/running).
+- Cut modes (`posting.window`): `source` = pipeline clip with source VOD on disk, absolute VOD seconds, re-rendered via `clip.render_custom` into the same file name; `clip` = editor clip (`_edit_` in name) or source already freed, seconds within the file, shorten only via `clip.trim_clip`, first original kept in `clips/.orig/` for „Zurücksetzen“.
+- A clip with a queued/running post is locked (trim/reset/send → 409): the poster copied the video at submit time and cannot swap it, so re-cutting would make the page show something other than what gets posted.
+- „Free MB“ keeps `posts.json`, `transcript.json`, `audio.json`, `chat.json`, `facecam.json` (`web._FREE_KEEP`) so the panel still works without the source.
 
 ### Config and secrets
 

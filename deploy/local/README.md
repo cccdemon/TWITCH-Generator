@@ -107,6 +107,15 @@ Ziel: 6-h-VOD in < 4 h. Stellhebel in `config.yaml`:
 
 `run.json` im VOD-Ordner enthält Start/ETA/Dauer; `cost.json` zeigt Token-Zahlen (0 $ bei Ollama).
 
+### Posten über das Handy
+
+TikTok/Instagram laufen über den Handy-Dienst **clip-poster** (`poster/`, eigener Host mit per USB angeschlossenem Handy, Port 3300). Einmalig in der Settings-Seite eintragen:
+
+- `Handy-Dienst URL` = `http://<phone-host>:3300`, `Handy-Dienst Token` = `POSTER_TOKEN` aus `/opt/clip-poster/.env` auf dem Phone-Host
+- `Twitch-Link für Posts`, `Feste Hashtags`, optional `Post-Textvorlage` (`{title}`, `{twitch}`, `{hashtags}`)
+
+Danach auf der Clip-Seite eines VODs pro Clip „📱 Posten“: schneiden, Vorschau, Text prüfen, senden. Erst mit **Probelauf** testen.
+
 ## Rückfall auf Anthropic
 
 `config.yaml` → `llm.provider: anthropic`, `ANTHROPIC_API_KEY` in `.env` oder in der Settings-Seite eintragen, `dc up -d`.
