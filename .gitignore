@@ -15,3 +15,9 @@ venv/
 
 # ClipBox bootstrap output
 FIRST-LOGIN.txt
+
+# Claude Code personal settings (contain LAN host details)
+.claude/settings.local.json
+
+# Brainstorming companion mockups
+.superpowers/
