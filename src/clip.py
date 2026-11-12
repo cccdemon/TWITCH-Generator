@@ -242,3 +242,35 @@ def render_custom(
     subprocess.run(cmd, check=True)
     os.replace(tmp, out_path)
     return out_path
+
+
+def probe_duration(path: Path) -> float:
+    """Container duration in seconds (ffprobe)."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return float(out)
+
+
+def trim_clip(src: Path, out: Path, start: float, end: float) -> Path:
+    """Re-encode [start, end) of an already rendered clip (no source VOD needed).
+
+    `src` may equal `out`: the result goes to a .part file first and replaces
+    `out` only when ffmpeg succeeded.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    start = max(0.0, float(start))
+    duration = max(0.5, float(end) - start)
+    tmp = out.with_suffix(".mp4.part")
+    cmd = [
+        "ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{duration:.2f}",
+        "-map", "0:v", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-f", "mp4", str(tmp),
+    ]
+    subprocess.run(cmd, check=True)
+    os.replace(tmp, out)
+    return out

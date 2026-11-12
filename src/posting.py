@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -136,3 +137,125 @@ class PostStore:
             entry["posts"] = list(entry["posts"]) + [rec]
             data[clip] = entry
             self._save(data)
+
+
+# --------------------------------------------------------------------- trim
+class LockedError(Exception):
+    """A post of this clip is queued/running; the phone already has its copy."""
+
+
+MIN_LEN_S = 1.0
+
+
+def _vod_duration(vod_dir: Path) -> float | None:
+    try:
+        d = float(json.loads((vod_dir / "info.json").read_text(encoding="utf-8")).get("duration") or 0)
+        return d or None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _source(vod_dir: Path) -> Path:
+    return vod_dir / f"{vod_dir.name}.mp4"
+
+
+def _orig_window(moment: dict, cfg: dict) -> tuple[float, float]:
+    c = cfg.get("clip") or {}
+    start = max(0.0, float(moment["start"]) - float(c.get("pad_start", 1.0)))
+    return start, float(moment["end"]) + float(c.get("pad_end", 1.0))
+
+
+def _moment(clip: str, moments: dict[int, dict]) -> dict:
+    return moments[int(clip.split("_", 1)[0])]
+
+
+def window(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict) -> dict:
+    """Current cut + draggable range for the timeline.
+
+    mode "source": absolute VOD seconds, re-cut from the source video (pipeline
+    clip and source still on disk). mode "clip": seconds within the clip file,
+    shorten only.
+    """
+    from . import clip as clip_stage
+
+    vod_dir = Path(vod_dir)
+    kind = clip_kind(clip, moments)
+    if kind == "pipeline" and _source(vod_dir).exists():
+        o_start, o_end = _orig_window(_moment(clip, moments), cfg)
+        trim = PostStore(vod_dir).get(clip)["trim"]
+        if trim and trim.get("mode") == "source":
+            start, end = float(trim["start"]), float(trim["end"])
+        else:
+            start, end = o_start, o_end
+        lo = max(0.0, start - MARGIN_S)
+        hi = end + MARGIN_S
+        dur = _vod_duration(vod_dir)
+        if dur:
+            hi = min(hi, dur)
+        return {"kind": kind, "mode": "source", "source": True, "start": start, "end": end,
+                "min": lo, "max": hi, "orig_start": o_start, "orig_end": o_end}
+    length = clip_stage.probe_duration(vod_dir / "clips" / clip)
+    return {"kind": kind, "mode": "clip", "source": _source(vod_dir).exists(), "start": 0.0,
+            "end": length, "min": 0.0, "max": length, "orig_start": 0.0, "orig_end": length}
+
+
+def _render_source(vod_dir: Path, clip: str, start: float, end: float, moments, cfg,
+                   facecam, segments) -> None:
+    from . import clip as clip_stage
+
+    c = cfg.get("clip") or {}
+    clip_stage.render_custom(
+        _source(vod_dir), vod_dir / "clips" / clip,
+        start=start, duration=end - start,
+        width=c.get("width", 1080), height=c.get("height", 1920),
+        layout=c.get("layout", "split"), facecam=facecam, game=None,
+        segments=segments, burn_subtitles=bool(c.get("burn_subtitles", False)),
+        title=_moment(clip, moments).get("title", ""),
+    )
+
+
+def apply_trim(vod_dir: Path, clip: str, start: float, end: float, moments: dict[int, dict],
+               cfg: dict, facecam: dict | None, segments) -> dict:
+    from . import clip as clip_stage
+
+    vod_dir = Path(vod_dir)
+    store = PostStore(vod_dir)
+    if is_locked(store.get(clip)):
+        raise LockedError("erst Post abbrechen")
+    w = window(vod_dir, clip, moments, cfg)
+    start, end = float(start), float(end)
+    if end - start < MIN_LEN_S:
+        raise ValueError(f"Clip muss mindestens {MIN_LEN_S:g} s lang sein")
+    if start < w["min"] - 0.01 or end > w["max"] + 0.01:
+        raise ValueError("Schnitt außerhalb des verfügbaren Bereichs")
+    if w["mode"] == "source":
+        _render_source(vod_dir, clip, start, end, moments, cfg, facecam, segments)
+        store.update(clip, trim={"mode": "source", "start": start, "end": end})
+    else:
+        path = vod_dir / "clips" / clip
+        backup = vod_dir / "clips" / ".orig" / clip
+        if not backup.exists():
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup)
+        clip_stage.trim_clip(path, path, start, end)
+        store.update(clip, trim=None)
+    return window(vod_dir, clip, moments, cfg)
+
+
+def reset_trim(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict,
+               facecam: dict | None, segments) -> dict:
+    vod_dir = Path(vod_dir)
+    store = PostStore(vod_dir)
+    if is_locked(store.get(clip)):
+        raise LockedError("erst Post abbrechen")
+    backup = vod_dir / "clips" / ".orig" / clip
+    if clip_kind(clip, moments) == "pipeline" and _source(vod_dir).exists():
+        o_start, o_end = _orig_window(_moment(clip, moments), cfg)
+        _render_source(vod_dir, clip, o_start, o_end, moments, cfg, facecam, segments)
+        backup.unlink(missing_ok=True)
+    elif backup.exists():
+        os.replace(backup, vod_dir / "clips" / clip)
+    else:
+        raise ValueError("nichts zurückzusetzen")
+    store.update(clip, trim=None)
+    return window(vod_dir, clip, moments, cfg)
