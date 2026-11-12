@@ -59,3 +59,17 @@ def test_unreachable_is_postererror(monkeypatch):
 def test_shot_returns_bytes(monkeypatch):
     _mock(monkeypatch, lambda r: httpx.Response(200, content=b"PNG"))
     assert pc.shot(3, "tiktok") == b"PNG"
+
+
+def test_non_json_reply_is_postererror(monkeypatch):                                # review M1
+    _mock(monkeypatch, lambda r: httpx.Response(200, text="<html>router login</html>"))
+    with pytest.raises(pc.PosterError):
+        pc.status()
+
+
+def test_create_reply_without_id_is_postererror(tmp_path, monkeypatch):
+    _mock(monkeypatch, lambda r: httpx.Response(200, json={"nope": 1}))
+    f = tmp_path / "a.mp4"
+    f.write_bytes(b"x")
+    with pytest.raises(pc.PosterError):
+        pc.create(f, {})

@@ -44,8 +44,18 @@ def _request(method: str, path: str, *, timeout: float = 10.0, **kw) -> httpx.Re
     return r
 
 
+def _json(r: httpx.Response) -> dict:
+    try:
+        d = r.json()
+    except ValueError as e:
+        raise PosterError(f"Handy-Dienst: unerwartete Antwort ({r.text[:80]!r}) – URL prüfen") from e
+    if not isinstance(d, dict):
+        raise PosterError("Handy-Dienst: unerwartete Antwort")
+    return d
+
+
 def status() -> dict:
-    return _request("GET", "/api/status").json()
+    return _json(_request("GET", "/api/status"))
 
 
 def create(video: Path, meta: dict) -> int:
@@ -53,23 +63,26 @@ def create(video: Path, meta: dict) -> int:
         r = _request("POST", "/api/posts", timeout=300.0,
                      files={"video": (Path(video).name, fh, "video/mp4")},
                      data={"meta": json.dumps(meta)})
-    return int(r.json()["id"])
+    try:
+        return int(_json(r)["id"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise PosterError("Handy-Dienst: Antwort ohne Post-ID") from e
 
 
 def get(pid: int) -> dict:
-    return _request("GET", f"/api/posts/{int(pid)}").json()
+    return _json(_request("GET", f"/api/posts/{int(pid)}"))
 
 
 def edit(pid: int, **fields) -> dict:
-    return _request("PATCH", f"/api/posts/{int(pid)}", json=fields).json()
+    return _json(_request("PATCH", f"/api/posts/{int(pid)}", json=fields))
 
 
 def cancel(pid: int) -> dict:
-    return _request("POST", f"/api/posts/{int(pid)}/cancel").json()
+    return _json(_request("POST", f"/api/posts/{int(pid)}/cancel"))
 
 
 def retry(pid: int) -> dict:
-    return _request("POST", f"/api/posts/{int(pid)}/retry").json()
+    return _json(_request("POST", f"/api/posts/{int(pid)}/retry"))
 
 
 def shot(pid: int, platform: str) -> bytes:

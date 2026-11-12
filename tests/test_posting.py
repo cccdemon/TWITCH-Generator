@@ -78,3 +78,7 @@ def test_suggest_hashtags_never_raises(monkeypatch):
     from src import llm, posting
     monkeypatch.setattr(llm, "structured", lambda **kw: (_ for _ in ()).throw(RuntimeError("down")))
     assert posting.suggest_hashtags("B", "", "", [], {}, log=lambda s: None) == []
+
+
+def test_build_caption_crlf_template_from_textarea():                              # review M5
+    assert build_caption("{title}\r\n\r\nLive: {twitch}\r\n\r\n{hashtags}", "T", "", ["#a"]) == "T\n\n#a"

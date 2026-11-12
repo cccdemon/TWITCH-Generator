@@ -51,7 +51,8 @@ def parse_fixed_tags(raw: str) -> list[str]:
 
 
 def build_caption(template: str, title: str, twitch: str, hashtags: list[str]) -> str:
-    tpl = (template or DEFAULT_TEMPLATE).replace("\\n", "\n")
+    # Settings textareas submit CRLF; "\n" typed literally also means a line break.
+    tpl = (template or DEFAULT_TEMPLATE).replace("\r\n", "\n").replace("\r", "\n").replace("\\n", "\n")
     if not (twitch or "").strip():
         tpl = "\n".join(line for line in tpl.split("\n") if "{twitch}" not in line)
     text = (tpl.replace("{title}", title or "")
@@ -162,6 +163,17 @@ class PostStore:
         with _store_lock:
             data = self._load()
             entry = {**_empty(), **(data.get(clip) or {}), **fields}
+            data[clip] = entry
+            self._save(data)
+            return entry
+
+    def merge_posts(self, clip: str, updates: dict[int, dict]) -> dict:
+        """Merge remote fields into post records by id, re-reading under the lock
+        (a concurrent send/cancel must not be overwritten by a stale list)."""
+        with _store_lock:
+            data = self._load()
+            entry = {**_empty(), **(data.get(clip) or {})}
+            entry["posts"] = [{**p, **updates.get(p.get("id"), {})} for p in entry["posts"]]
             data[clip] = entry
             self._save(data)
             return entry

@@ -169,7 +169,10 @@ async function phoneStatus() {
   try {
     const s = await api("GET", "/api/poster/status");
     if (!s.configured) { el.innerHTML = `📱 Handy: <a href="${BASE}/">in den Settings eintragen</a>`; return; }
-    if (!s.online) { el.textContent = "📱 Handy offline"; el.title = s.error || "Handy nicht erreichbar"; }
+    // online is null while the poster's worker holds the phone (posting right now)
+    if (s.busy && !s.online) { el.textContent = `📱 Handy postet gerade${s.queued ? ` · ${s.queued} geplant` : ""}`; el.title = ""; }
+    else if (s.online === null) { el.textContent = "📱 Handy beschäftigt"; el.title = ""; }
+    else if (!s.online) { el.textContent = "📱 Handy offline"; el.title = s.error || "Handy nicht erreichbar"; }
     else {
       let t = `📱 Handy online`;
       if (s.battery !== null && s.battery !== undefined) t += ` · ${s.battery} %`;
@@ -250,14 +253,7 @@ async function loadPanel(card, p) {
 
   // preview source
   S.pv = q(".pv");
-  if (S.w.mode === "source") {
-    try {
-      let st = (await api("GET", `/proxy/${VOD}/status`)).state;
-      if (st !== "ready" && st !== "building") st = (await api("POST", `/proxy/${VOD}`)).state;
-      S.proxy = st === "ready";
-      if (!S.proxy) q('[data-a="pvnote"]').textContent = "Vorschau-Video wird vorbereitet – bis dahin nur innerhalb des gerenderten Clips";
-    } catch (e) {}
-  }
+  if (S.w.mode === "source") await proxyState(S);
   setPreviewSrc(S);
   S.pv.addEventListener("timeupdate", () => {
     const t = S.pv.currentTime + pvOffset(S);
@@ -291,6 +287,7 @@ async function loadPanel(card, p) {
   q('[data-a="render"]').onclick = () => runTrim(S, "/trim", {start: S.inT, end: S.outT});
   q('[data-a="reset"]').onclick = () => { if (confirm("Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
   q('[data-a="tags"]').onclick = async () => {
+    if (!confirm("Text durch neuen Vorschlag mit neuen KI-Tags ersetzen?")) return;
     const b = q('[data-a="tags"]'); b.disabled = true; b.textContent = "KI denkt …";
     try { const r = await api("POST", url + "/hashtags"); q('[data-a="cap"]').value = r.caption; update(S); }
     catch (e) { q('[data-a="err"]').textContent = e.message; }
@@ -309,8 +306,37 @@ async function loadPanel(card, p) {
   q('[data-a="at"]').addEventListener("input", () => update(S));
   q('[data-a="send"]').onclick = () => send(S);
   update(S); renderPosts(S);
+  if (d.ai_tags === null) aiTags(S, d.caption);
 }
 
+// First open: ask for AI hashtags in the background; only replace the text if the
+// user has not edited it in the meantime.
+async function aiTags(S, suggested) {
+  const b = S.q('[data-a="tags"]'); b.disabled = true; b.textContent = "KI sucht Tags …";
+  try {
+    const r = await api("POST", S.url + "/hashtags");
+    const cap = S.q('[data-a="cap"]');
+    if (cap.value === suggested) { cap.value = r.caption; update(S); }
+  } catch (e) {}
+  b.disabled = false; b.textContent = "KI-Tags neu";
+}
+
+// The editor proxy (480p copy of the whole VOD) lets the preview show material
+// outside the rendered clip. Building it transcodes the full VOD, so only on request.
+async function proxyState(S, build) {
+  const note = S.q('[data-a="pvnote"]');
+  let st = "none";
+  try { st = (await api(build ? "POST" : "GET", build ? `/proxy/${VOD}` : `/proxy/${VOD}/status`)).state; } catch (e) {}
+  const was = S.proxy; S.proxy = st === "ready";
+  if (S.proxy) { note.textContent = ""; if (!was && build !== undefined) setPreviewSrc(S); return; }
+  if (st === "building") {
+    note.textContent = "Vorschau-Video wird gebaut … bis dahin Vorschau nur innerhalb des gerenderten Clips";
+    setTimeout(() => { if (S.p.isConnected) proxyState(S, false); }, 10000);
+  } else {
+    note.innerHTML = `Vorschau außerhalb des Clips braucht das Vorschau-Video. <button type="button" class="sec" data-a="mkproxy">bauen</button>`;
+    note.querySelector('[data-a="mkproxy"]').onclick = () => proxyState(S, true);
+  }
+}
 function pvOffset(S) { return (S.w.mode === "source" && !S.proxy) ? S.w.start : 0; }
 function setPreviewSrc(S) {
   const clipUrl = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
@@ -451,7 +477,8 @@ function renderPosts(S) {
       html += `<div class="row"><input type="datetime-local" data-r="at"><button type="button" class="sec" data-r="time">Zeit ändern</button>` +
               `<button type="button" class="sec" data-r="text">Text übernehmen</button><button type="button" class="sec" data-r="cancel">Abbrechen</button></div>`;
     if (!i && ["failed", "partial", "cancelled"].includes(st))
-      html += `<div class="row"><button type="button" class="sec" data-r="retry">Wiederholen</button></div>`;
+      html += rec.stale ? `<div class="pnote">Clip wurde seitdem geändert – Wiederholen würde die alte Fassung posten. Bitte neu senden.</div>`
+                        : `<div class="row"><button type="button" class="sec" data-r="retry">Wiederholen</button></div>`;
     el.innerHTML = html;
     const act = async (fn) => { try { const d = await fn(); S.posts = d.posts; S.locked = d.locked; renderPosts(S); setCardState(S); update(S); }
                                catch (e) { S.q('[data-a="err"]').textContent = e.message; } };

@@ -22,8 +22,29 @@ from .models import TranscriptSegment
 router = APIRouter()
 
 _SHOT_PLATFORMS = {"tiktok", "instagram"}
-_send_locks: dict[tuple[str, str], threading.Lock] = {}
-_send_locks_guard = threading.Lock()
+# One lock per clip shared by render, reset and send: a render must never swap the
+# file while it is being uploaded to the phone, and two renders must not share a .part.
+_clip_locks: dict[tuple[str, str], threading.Lock] = {}
+_clip_locks_guard = threading.Lock()
+
+
+class _ClipBusy:
+    def __init__(self, vod: str, clip: str):
+        with _clip_locks_guard:
+            self.lock = _clip_locks.setdefault((vod, clip), threading.Lock())
+
+    def __enter__(self):
+        if not self.lock.acquire(blocking=False):
+            raise HTTPException(409, "Clip wird gerade gerendert oder gesendet")
+        return self
+
+    def __exit__(self, *exc):
+        self.lock.release()
+
+
+def _file_sig(path: Path) -> list[int]:
+    st = path.stat()
+    return [st.st_size, st.st_mtime_ns]
 
 
 # ------------------------------------------------------------------ helpers
@@ -141,20 +162,20 @@ def _merge_remote(rec: dict, remote: dict) -> dict:
     return out
 
 
-def _refresh(store: posting.PostStore, clip: str, only_active: bool = True) -> dict:
-    entry = store.get(clip)
-    posts, changed = [], False
-    for rec in entry["posts"]:
-        if not only_active or rec.get("status") in posting.ACTIVE:
-            try:
-                rec = _merge_remote(rec, poster_client.get(rec["id"]))
-                changed = True
-            except poster_client.PosterError:
-                pass
-        posts.append(rec)
-    if changed:
-        entry = store.update(clip, posts=posts)
-    return entry
+def _refresh(store: posting.PostStore, clip: str, only_active: bool = True,
+             ids: set[int] | None = None) -> dict:
+    """Pull poster status for the clip's posts and merge by id (never rewrite the list)."""
+    updates: dict[int, dict] = {}
+    for rec in store.get(clip)["posts"]:
+        if ids is not None and rec.get("id") not in ids:
+            continue
+        if only_active and ids is None and rec.get("status") not in posting.ACTIVE:
+            continue
+        try:
+            updates[rec["id"]] = _merge_remote({}, poster_client.get(rec["id"]))
+        except (poster_client.PosterError, KeyError):
+            pass
+    return store.merge_posts(clip, updates) if updates else store.get(clip)
 
 
 def _panel(vod: str, clip: str) -> dict:
@@ -165,16 +186,18 @@ def _panel(vod: str, clip: str) -> dict:
     moments = _moments(vod)
     store = posting.PostStore(vdir)
     entry = _refresh(store, clip) if poster_client.configured() else store.get(clip)
-    if entry["ai_tags"] is None:
-        entry = store.update(clip, ai_tags=_ai_tags(vdir, clip, moments, cfg))
-    caption = entry["caption"] or _suggested_caption(clip, moments, entry["ai_tags"])
+    # AI tags are NOT fetched here: under Ollama that can take minutes (model swap,
+    # running job). The page asks POST .../hashtags after rendering the panel.
+    caption = entry["caption"] or _suggested_caption(clip, moments, entry["ai_tags"] or [])
+    sig = _file_sig(_clip_path(vod, clip))
+    posts = [{**p, "stale": bool(p.get("file")) and p.get("file") != sig} for p in entry["posts"]]
     return {
         "window": posting.window(vdir, clip, moments, cfg),
         "caption": caption,
         "ai_tags": entry["ai_tags"],
         "fixed_tags": _fixed_tags(),
         "check": posting.check_caption(caption),
-        "posts": entry["posts"],
+        "posts": posts,
         "locked": posting.is_locked(entry),
         "configured": poster_client.configured(),
     }
@@ -272,7 +295,10 @@ def _trim_call(fn, vod: str, clip: str, *args):
     if vod in _busy_vod_ids():
         raise HTTPException(409, "VOD wird gerade verarbeitet – später schneiden")
     try:
-        return fn(vdir, clip, *args, _moments(vod), load_config(), _facecam(vod), _segments(vdir) or None)
+        with _ClipBusy(vod, clip):
+            return fn(vdir, clip, *args, _moments(vod), load_config(), _facecam(vod), _segments(vdir) or None)
+    except HTTPException:
+        raise
     except posting.LockedError as e:
         raise HTTPException(409, str(e)) from e
     except ValueError as e:
@@ -317,11 +343,7 @@ def post_send(request: Request, vod: str, clip: str, body: dict = Body(...)) -> 
     if not poster_client.configured():
         raise HTTPException(400, "Handy-Dienst nicht eingerichtet (Settings)")
 
-    with _send_locks_guard:
-        lock = _send_locks.setdefault((vod, clip), threading.Lock())
-    if not lock.acquire(blocking=False):
-        raise HTTPException(409, "wird schon gesendet")
-    try:
+    with _ClipBusy(vod, clip):
         store = posting.PostStore(vdir)
         if posting.is_locked(store.get(clip)):
             raise HTTPException(409, "Clip ist schon geplant – erst abbrechen")
@@ -330,13 +352,12 @@ def post_send(request: Request, vod: str, clip: str, body: dict = Body(...)) -> 
         meta = {"platforms": platforms, "caption": caption, "clip_name": clip, "title": title,
                 "source": f"{vod}/{clip}", "run_at": run_at,
                 "threads": bool(body.get("threads", True)), "dry_run": bool(body.get("dry_run"))}
+        sig = _file_sig(path)
         pid = _poster_call(poster_client.create, path, meta)
         store.add_post(clip, {"id": pid, "platforms": platforms, "dry_run": meta["dry_run"],
                               "threads": meta["threads"], "run_at": run_at, "created": time.time(),
-                              "status": "queued", "caption": caption})
+                              "status": "queued", "caption": caption, "file": sig})
         store.update(clip, caption=caption)
-    finally:
-        lock.release()
     return JSONResponse(_panel(vod, clip))
 
 
@@ -354,26 +375,23 @@ def post_edit(request: Request, vod: str, clip: str, pid: int, body: dict = Body
         if errs:
             raise HTTPException(400, "; ".join(errs))
     _poster_call(poster_client.edit, pid, **fields)
-    _refresh(posting.PostStore(vdir), clip, only_active=False)
+    _refresh(posting.PostStore(vdir), clip, ids={pid})
     return JSONResponse(_panel(vod, clip))
 
 
 def _post_action(request: Request, vod: str, clip: str, pid: int, fn) -> JSONResponse:
     _user(request)
     vdir = _vod_dir(vod)
-    _clip_path(vod, clip)
-    _poster_call(fn, pid)
+    path = _clip_path(vod, clip)
     store = posting.PostStore(vdir)
-    entry = store.get(clip)
-    posts = []
-    for rec in entry["posts"]:
-        if rec.get("id") == pid:
-            try:
-                rec = _merge_remote(rec, poster_client.get(pid))
-            except poster_client.PosterError:
-                pass
-        posts.append(rec)
-    store.update(clip, posts=posts)
+    if fn is poster_client.retry:
+        rec = next((p for p in store.get(clip)["posts"] if p.get("id") == pid), None)
+        # The poster retries with ITS copy of the video; after a re-cut that is no
+        # longer what the page shows.
+        if rec and rec.get("file") and path.is_file() and rec["file"] != _file_sig(path):
+            raise HTTPException(409, "Clip wurde seitdem geändert – bitte neu senden")
+    _poster_call(fn, pid)
+    _refresh(store, clip, ids={pid})
     return JSONResponse(_panel(vod, clip))
 
 

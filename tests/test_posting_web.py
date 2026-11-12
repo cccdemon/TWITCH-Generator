@@ -55,14 +55,13 @@ def test_requires_login(vod):
 
 def test_panel_builds_caption_from_settings(client, vod):
     j = client.get(URL).json()
-    assert j["caption"] == "Boom\n\nLive: twitch.tv/x\n\n#starcitizen #gaming #fail"
+    assert j["caption"] == "Boom\n\nLive: twitch.tv/x\n\n#starcitizen #gaming"
     assert j["window"]["mode"] == "clip" and j["locked"] is False and j["configured"] is True
-    assert posting.PostStore(vod).get(CLIP)["ai_tags"] == ["#fail"]
 
 
 def test_panel_ai_failure_falls_back_to_fixed(client, vod, monkeypatch):
     monkeypatch.setattr(posting, "suggest_hashtags", lambda *a, **k: [])
-    assert client.get(URL).json()["caption"].endswith("#starcitizen #gaming")
+    assert client.post(URL + "/hashtags").json()["caption"].endswith("#starcitizen #gaming")
 
 
 def test_status_offline_is_200(client, monkeypatch):
@@ -208,3 +207,59 @@ def test_clips_page_has_post_panel_and_free_warning(client, vod):
     (vod / "clips" / "200_funny_y.mp4").write_bytes(b"x")
     html = client.get("/clips/555").text
     assert "nur noch gekürzt" in html
+
+
+# ---- final review fixes
+def test_retry_refused_when_clip_changed_since_send(client, vod, monkeypatch):     # I1
+    monkeypatch.setattr(poster_client, "create", lambda p, m: 9)
+    client.post(URL + "/send", json={"caption": "x", "platforms": ["tiktok"]})
+    store = posting.PostStore(vod)
+    store.update(CLIP, posts=[{**store.get(CLIP)["posts"][0], "status": "failed"}])
+    (vod / "clips" / CLIP).write_bytes(b"NEW CUT, LONGER")
+    called = []
+    monkeypatch.setattr(poster_client, "retry", lambda pid: called.append(pid) or {"ok": True})
+    j = client.get(URL).json()
+    assert j["posts"][0]["stale"] is True
+    r = client.post(URL + "/posts/9/retry")
+    assert r.status_code == 409 and "neu senden" in r.text and not called
+
+
+def test_trim_refused_while_send_in_progress(client, vod, monkeypatch):            # I2
+    gate, started = threading.Event(), threading.Event()
+
+    def slow_create(path, meta):
+        started.set(); gate.wait(5); return 1
+
+    monkeypatch.setattr(poster_client, "create", slow_create)
+    t = threading.Thread(target=lambda: client.post(URL + "/send", json={"caption": "x", "platforms": ["tiktok"]}))
+    t.start()
+    assert started.wait(5)
+    r = client.post(URL + "/trim", json={"start": 1, "end": 10})
+    gate.set(); t.join(5)
+    assert r.status_code == 409
+
+
+def test_refresh_does_not_drop_post_added_meanwhile(client, vod, monkeypatch):     # I3
+    store = posting.PostStore(vod)
+    store.add_post(CLIP, {"id": 4, "status": "queued", "platforms": ["tiktok"]})
+
+    def get(pid):
+        store.add_post(CLIP, {"id": 5, "status": "queued", "platforms": ["tiktok"]})  # concurrent send
+        return {"id": 4, "status": "cancelled"}
+
+    monkeypatch.setattr(poster_client, "get", get)
+    client.get(URL)
+    ids = {p["id"]: p["status"] for p in store.get(CLIP)["posts"]}
+    assert ids == {4: "cancelled", 5: "queued"}
+
+
+def test_panel_does_not_block_on_ai(client, vod, monkeypatch):                    # I5
+    monkeypatch.setattr(posting, "suggest_hashtags", _raise(AssertionError("LLM called in panel")))
+    j = client.get(URL).json()
+    assert j["ai_tags"] is None and j["caption"].endswith("#starcitizen #gaming")
+
+
+def test_hashtags_route_fills_ai_tags(client, vod):                               # I5
+    j = client.post(URL + "/hashtags").json()
+    assert j["caption"].endswith("#starcitizen #gaming #fail")
+    assert posting.PostStore(vod).get(CLIP)["ai_tags"] == ["#fail"]
