@@ -264,6 +264,39 @@ def post_signals(request: Request, vod: str, clip: str) -> JSONResponse:
                          "chat": rel(_signal(vdir, "chat.json")), "cuts": cuts})
 
 
+_preview_locks: dict[str, threading.Lock] = {}
+
+
+@router.get("/api/post/{vod}/{clip}/preview")
+def post_preview(request: Request, vod: str, clip: str):
+    """Low-res cut of the whole timeline range (window min..max) from the source VOD, so
+    the preview can show material before/after the rendered clip. Cached per range."""
+    from fastapi.responses import FileResponse
+    from . import clip as clip_stage
+
+    _user(request)
+    vdir = _vod_dir(vod)
+    if not _clip_path(vod, clip).is_file():
+        raise HTTPException(404, "no such clip")
+    w = posting.window(vdir, clip, _moments(vod), load_config())
+    if w["mode"] != "source":
+        raise HTTPException(404, "kein Quellvideo – Vorschau nur aus dem Clip")
+    stem = clip[:-4]
+    out = vdir / "preview" / f"{stem}_{int(w['min'] * 10)}_{int(w['max'] * 10)}.mp4"
+    with _clip_locks_guard:
+        lock = _preview_locks.setdefault(str(out), threading.Lock())
+    with lock:
+        if not out.is_file():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            for old in out.parent.glob(f"{stem}_*.mp4"):
+                old.unlink(missing_ok=True)
+            try:
+                clip_stage.preview_segment(posting._source(vdir), out, w["min"], w["max"])
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(500, f"Vorschau fehlgeschlagen: {e}") from e
+    return FileResponse(out, media_type="video/mp4", headers={"Cache-Control": "no-store"})
+
+
 @router.post("/api/post/{vod}/{clip}/hashtags")
 def post_hashtags(request: Request, vod: str, clip: str) -> JSONResponse:
     _user(request)

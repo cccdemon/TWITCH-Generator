@@ -253,7 +253,6 @@ async function loadPanel(card, p) {
 
   // preview source
   S.pv = q(".pv");
-  if (S.w.mode === "source") await proxyState(S);
   setPreviewSrc(S);
   S.pv.addEventListener("timeupdate", () => {
     const t = S.pv.currentTime + pvOffset(S);
@@ -283,7 +282,16 @@ async function loadPanel(card, p) {
   tl.addEventListener("pointerdown", ev => { if (!ev.target.classList.contains("h")) seek(S, tAt(ev)); });
 
   // buttons
-  q('[data-a="play"]').onclick = () => { seek(S, S.inT); S.pv.play().catch(() => {}); };
+  const toggle = () => {
+    if (!S.pv.paused) { S.pv.pause(); return; }
+    const t = S.pv.currentTime + pvOffset(S);
+    if (t < S.inT - 0.05 || t >= S.outT - 0.1) seek(S, S.inT);
+    S.pv.play().catch(() => {});
+  };
+  q('[data-a="play"]').onclick = toggle;
+  S.pv.addEventListener("click", toggle);
+  S.pv.addEventListener("play", () => { q('[data-a="play"]').textContent = "⏸ Stopp"; });
+  S.pv.addEventListener("pause", () => { q('[data-a="play"]').textContent = "▶ Vorschau In→Out"; });
   q('[data-a="render"]').onclick = () => runTrim(S, "/trim", {start: S.inT, end: S.outT});
   q('[data-a="reset"]').onclick = () => { if (confirm("Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
   q('[data-a="tags"]').onclick = async () => {
@@ -321,27 +329,37 @@ async function aiTags(S, suggested) {
   b.disabled = false; b.textContent = "KI-Tags neu";
 }
 
-// The editor proxy (480p copy of the whole VOD) lets the preview show material
-// outside the rendered clip. Building it transcodes the full VOD, so only on request.
-async function proxyState(S, build) {
-  const note = S.q('[data-a="pvnote"]');
-  let st = "none";
-  try { st = (await api(build ? "POST" : "GET", build ? `/proxy/${VOD}` : `/proxy/${VOD}/status`)).state; } catch (e) {}
-  const was = S.proxy; S.proxy = st === "ready";
-  if (S.proxy) { note.textContent = ""; if (!was && build !== undefined) setPreviewSrc(S); return; }
-  if (st === "building") {
-    note.textContent = "Vorschau-Video wird gebaut … bis dahin Vorschau nur innerhalb des gerenderten Clips";
-    setTimeout(() => { if (S.p.isConnected) proxyState(S, false); }, 10000);
-  } else {
-    note.innerHTML = `Vorschau außerhalb des Clips braucht das Vorschau-Video. <button type="button" class="sec" data-a="mkproxy">bauen</button>`;
-    note.querySelector('[data-a="mkproxy"]').onclick = () => proxyState(S, true);
-  }
+// Source mode: the server cuts the whole timeline range (window min..max) from the
+// VOD as a small 480p file, so the handles can be previewed before the old start or
+// after the old end. Until it is there (a few seconds) the rendered clip plays.
+function pvOffset(S) {
+  if (S.w.mode !== "source") return 0;
+  return S.pvSeg ? S.w.min : S.w.start;
 }
-function pvOffset(S) { return (S.w.mode === "source" && !S.proxy) ? S.w.start : 0; }
 function setPreviewSrc(S) {
+  const note = S.q('[data-a="pvnote"]');
   const clipUrl = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
-  S.pv.src = (S.w.mode === "source" && S.proxy) ? `${BASE}/source/${VOD}` : clipUrl;
+  S.pvSeg = false;
+  S.pv.src = clipUrl;
   S.pv.addEventListener("loadedmetadata", () => seek(S, S.inT), {once: true});
+  if (S.w.mode !== "source") { note.textContent = ""; return; }
+  note.textContent = "Vorschau mit ±20 s wird vorbereitet …";
+  const want = `${S.url}/preview?r=${Math.round(S.w.min * 10)}_${Math.round(S.w.max * 10)}`;
+  const probe = document.createElement("video");
+  probe.preload = "metadata";
+  probe.addEventListener("loadedmetadata", () => {
+    if (!S.p.isConnected) return;
+    const playing = !S.pv.paused;
+    const t = S.pv.currentTime + pvOffset(S);
+    S.pvSeg = true;
+    S.pv.src = BASE + want;
+    S.pv.addEventListener("loadedmetadata", () => { seek(S, t); if (playing) S.pv.play().catch(() => {}); }, {once: true});
+    note.textContent = "";
+  }, {once: true});
+  probe.addEventListener("error", () => {
+    note.textContent = "Vorschau außerhalb des Clips nicht verfügbar – erst rendern, dann ansehen";
+  }, {once: true});
+  probe.src = BASE + want;
 }
 function seek(S, t) {
   const off = pvOffset(S);

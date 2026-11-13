@@ -263,3 +263,23 @@ def test_hashtags_route_fills_ai_tags(client, vod):                             
     j = client.post(URL + "/hashtags").json()
     assert j["caption"].endswith("#starcitizen #gaming #fail")
     assert posting.PostStore(vod).get(CLIP)["ai_tags"] == ["#fail"]
+
+
+# ---- window preview (source segment, so the handles can go before the old start)
+def test_preview_cuts_window_from_source_once(client, vod, monkeypatch):
+    (vod / "555.mp4").write_bytes(b"SRC")
+    calls = []
+
+    def fake(source, out, start, end):
+        calls.append((start, end)); out.write_bytes(b"PREVIEW"); return out
+
+    monkeypatch.setattr(clip_stage, "preview_segment", fake)
+    r = client.get(URL + "/preview")
+    assert r.status_code == 200 and r.content == b"PREVIEW"
+    assert calls == [(79.0, 140.0)]                # window min/max (pad 1, ±20 s, VOD 140 s)
+    client.get(URL + "/preview")
+    assert len(calls) == 1                          # cached
+
+
+def test_preview_404_without_source(client, vod):
+    assert client.get(URL + "/preview").status_code == 404

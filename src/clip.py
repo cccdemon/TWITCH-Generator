@@ -274,3 +274,20 @@ def trim_clip(src: Path, out: Path, start: float, end: float) -> Path:
     subprocess.run(cmd, check=True)
     os.replace(tmp, out)
     return out
+
+
+def preview_segment(source: Path, out: Path, start: float, end: float) -> Path:
+    """Small 480p landscape cut of [start, end) from the source VOD for the post panel's
+    preview (seconds of work instead of a full-VOD proxy). Written via .part."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    start = max(0.0, float(start))
+    tmp = out.with_suffix(".mp4.part")
+    cmd = [
+        "ffmpeg", "-y", "-nostdin", "-ss", f"{start:.2f}", "-i", str(source),
+        "-t", f"{max(0.5, float(end) - start):.2f}",
+        "-vf", "scale=-2:480", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-f", "mp4", str(tmp),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+    os.replace(tmp, out)
+    return out
