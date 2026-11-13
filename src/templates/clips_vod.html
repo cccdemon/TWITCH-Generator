@@ -45,6 +45,7 @@
   .tl .orig { position:absolute; top:0; bottom:0; border:1px dashed #556; border-radius:6px; pointer-events:none; }
   .tl .sel { position:absolute; top:0; bottom:0; background:rgba(62,207,142,.28); border-top:2px solid var(--ok); border-bottom:2px solid var(--ok); pointer-events:none; }
   .tl .h { position:absolute; top:-4px; bottom:-4px; width:14px; margin-left:-7px; background:#fc3; border-radius:4px; cursor:ew-resize; touch-action:none; }
+  .tl .h:focus { outline:2px solid #fff; outline-offset:1px; }
   .tl .h::after { content:""; position:absolute; left:6px; top:12px; bottom:12px; width:2px; background:#653; }
   .tl .ph { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; }
   .sig { width:100%; height:26px; display:block; }
@@ -221,9 +222,9 @@ async function loadPanel(card, p) {
     <h4>Schnitt</h4>
     <video class="pv" playsinline preload="metadata"></video>
     <div class="row"><button type="button" class="sec" data-a="play">▶ Vorschau In→Out</button>
-      <label><input type="checkbox" data-a="snap" checked> an Sätzen einrasten</label>
+      <label title="Griffe rasten im Umkreis von 0,4 s an Satzgrenzen ein (Alt beim Ziehen: aus)"><input type="checkbox" data-a="snap"> an Sätzen einrasten</label>
       <span class="pnote" data-a="pvnote"></span></div>
-    <div class="tl"><div class="orig"></div><div class="sel"></div><div class="h" data-h="in"></div><div class="h" data-h="out"></div><div class="ph"></div></div>
+    <div class="tl"><div class="orig"></div><div class="sel"></div><div class="h" data-h="in" tabindex="0" title="ziehen · ←/→ 0,1 s · Shift 1 s"></div><div class="h" data-h="out" tabindex="0" title="ziehen · ←/→ 0,1 s · Shift 1 s"></div><div class="ph"></div></div>
     <canvas class="sig" height="26"></canvas>
     <div class="tinfo"><span data-a="tmin"></span><span data-a="tcur"></span><span data-a="tmax"></span></div>
     <div class="row"><button type="button" data-a="render">🎬 Fertigen Clip rendern</button>
@@ -249,6 +250,8 @@ async function loadPanel(card, p) {
   S.q = q;
   q('[data-a="cap"]').value = d.caption;
   q('[data-a="threads"]').checked = lsGet("tg.threads", true);
+  q('[data-a="snap"]').checked = lsGet("tg.snap", false);
+  q('[data-a="snap"]').addEventListener("change", e => lsSet("tg.snap", e.target.checked));
   for (const pl of lsGet("tg.platforms", [])) { const c = q(`[data-p="${pl}"]`); if (c) c.checked = true; }
 
   // preview source
@@ -270,12 +273,16 @@ async function loadPanel(card, p) {
     h.addEventListener("pointerdown", ev => { ev.preventDefault(); ev.stopPropagation(); h.setPointerCapture(ev.pointerId); h.dataset.drag = "1"; });
     h.addEventListener("pointermove", ev => {
       if (!h.dataset.drag) return;
-      let t = snap(S, tAt(ev));
-      if (h.dataset.h === "in") S.inT = Math.min(t, S.outT - 1); else S.outT = Math.max(t, S.inT + 1);
-      S.inT = Math.max(S.w.min, S.inT); S.outT = Math.min(S.w.max, S.outT);
-      seek(S, h.dataset.h === "in" ? S.inT : Math.max(S.inT, S.outT - 2));
-      update(S);
+      moveHandle(S, h.dataset.h, ev.altKey ? tAt(ev) : snap(S, tAt(ev)));
     });
+    // fine cut: ←/→ 0.1 s, Shift 1 s (handle gets focus on click)
+    h.addEventListener("keydown", ev => {
+      if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+      ev.preventDefault();
+      const step = (ev.shiftKey ? 1 : 0.1) * (ev.key === "ArrowLeft" ? -1 : 1);
+      moveHandle(S, h.dataset.h, (h.dataset.h === "in" ? S.inT : S.outT) + step);
+    });
+    h.addEventListener("pointerdown", () => h.focus());
     const end = () => { delete h.dataset.drag; };
     h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end);
   });
@@ -368,9 +375,16 @@ function seek(S, t) {
   try { S.pv.currentTime = Math.max(0, x); } catch (e) {}
   drawTl(S, t);
 }
+function moveHandle(S, which, t) {
+  t = Math.round(t * 10) / 10;
+  if (which === "in") S.inT = Math.max(S.w.min, Math.min(t, S.outT - 1));
+  else S.outT = Math.min(S.w.max, Math.max(t, S.inT + 1));
+  seek(S, which === "in" ? S.inT : Math.max(S.inT, S.outT - 2));
+  update(S);
+}
 function snap(S, t) {
   if (!S.q('[data-a="snap"]').checked || !S.cuts.length) return t;
-  let best = t, dist = 1.5;
+  let best = t, dist = 0.4;
   for (const c of S.cuts) if (Math.abs(c - t) < dist) { dist = Math.abs(c - t); best = c; }
   return best;
 }
