@@ -125,3 +125,12 @@ def test_window_clamps_with_probed_source_when_info_lacks_duration(vod, rec, mon
     (vod / "info.json").write_text(json.dumps({"vod_id": "555"}))
     monkeypatch.setattr(clip_stage, "probe_duration", lambda p: 135.0 if p.name == "555.mp4" else 32.0)
     assert window(vod, CLIP, MOMENTS, CFG)["max"] == 135.0
+
+
+def test_source_duration_probed_once(vod, rec, monkeypatch):
+    (vod / "info.json").write_text(json.dumps({"vod_id": "555"}))
+    calls = []
+    monkeypatch.setattr(clip_stage, "probe_duration", lambda p: calls.append(p.name) or 135.0)
+    window(vod, CLIP, MOMENTS, CFG)
+    window(vod, CLIP, MOMENTS, CFG)
+    assert calls.count("555.mp4") == 1

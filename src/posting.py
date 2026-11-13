@@ -203,6 +203,26 @@ def _vod_duration(vod_dir: Path) -> float | None:
         return None
 
 
+_duration_cache: dict[tuple[str, int, int], float | None] = {}
+
+
+def _probed_duration(path: Path) -> float | None:
+    """ffprobe of a multi-GB VOD takes ~2.5 s; remember it per (path, size, mtime)."""
+    from . import clip as clip_stage
+
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _duration_cache:
+        try:
+            _duration_cache[key] = clip_stage.probe_duration(path)
+        except Exception:  # noqa: BLE001 — unclamped is still usable
+            _duration_cache[key] = None
+    return _duration_cache[key]
+
+
 def _source(vod_dir: Path) -> Path:
     return vod_dir / f"{vod_dir.name}.mp4"
 
@@ -239,10 +259,7 @@ def window(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict) -> dic
         hi = end + MARGIN_S
         dur = _vod_duration(vod_dir)
         if not dur:  # info.json from twitch.py carries no duration
-            try:
-                dur = clip_stage.probe_duration(_source(vod_dir))
-            except Exception:  # noqa: BLE001 — unclamped is still usable
-                dur = None
+            dur = _probed_duration(_source(vod_dir))
         if dur:
             hi = min(hi, dur)
         return {"kind": kind, "mode": "source", "source": True, "start": start, "end": end,
