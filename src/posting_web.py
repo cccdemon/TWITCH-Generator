@@ -200,7 +200,19 @@ def _panel(vod: str, clip: str) -> dict:
         "posts": posts,
         "locked": posting.is_locked(entry),
         "configured": poster_client.configured(),
+        "crop_default": _crop_default(vod),
     }
+
+
+def _crop_default(vod: str) -> dict:
+    """Starting boxes for the crop editor: facecam as detected/picked, game centred at
+    the output aspect (split: 1080x960 = 9:8 per half; crop: 9:16), for a 16:9 source."""
+    layout = (load_config().get("clip") or {}).get("layout", "split")
+    layout = layout if layout in posting.LAYOUTS else "split"
+    cam = _facecam(vod) or {"x": 0.0, "y": 0.0, "w": 0.22, "h": 0.22}
+    w = (9 / 8 if layout == "split" else 9 / 16) * 9 / 16
+    return {"layout": layout, "cam": {k: float(cam[k]) for k in ("x", "y", "w", "h")},
+            "game": {"x": round((1 - w) / 2, 4), "y": 0.0, "w": round(w, 4), "h": 1.0}}
 
 
 def _poster_call(fn, *a, **k):
@@ -319,7 +331,7 @@ def post_draft(request: Request, vod: str, clip: str, body: dict = Body(...)) ->
     return JSONResponse({"check": posting.check_caption(caption)})
 
 
-def _trim_call(fn, vod: str, clip: str, *args):
+def _trim_call(fn, vod: str, clip: str, *args, **kw):
     vdir = _vod_dir(vod)
     if not _clip_path(vod, clip).is_file():
         raise HTTPException(404, "no such clip")
@@ -329,7 +341,8 @@ def _trim_call(fn, vod: str, clip: str, *args):
         raise HTTPException(409, "VOD wird gerade verarbeitet – später schneiden")
     try:
         with _ClipBusy(vod, clip):
-            return fn(vdir, clip, *args, _moments(vod), load_config(), _facecam(vod), _segments(vdir) or None)
+            return fn(vdir, clip, *args, _moments(vod), load_config(), _facecam(vod),
+                      _segments(vdir) or None, **kw)
     except HTTPException:
         raise
     except posting.LockedError as e:
@@ -347,7 +360,8 @@ def post_trim(request: Request, vod: str, clip: str, body: dict = Body(...)) -> 
         start, end = float(body["start"]), float(body["end"])
     except (KeyError, TypeError, ValueError):
         raise HTTPException(400, "start/end fehlen")
-    return JSONResponse({"window": _trim_call(posting.apply_trim, vod, clip, start, end)})
+    crop = body.get("crop")
+    return JSONResponse({"window": _trim_call(posting.apply_trim, vod, clip, start, end, crop=crop)})
 
 
 @router.post("/api/post/{vod}/{clip}/reset")

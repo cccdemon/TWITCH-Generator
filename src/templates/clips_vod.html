@@ -45,6 +45,18 @@
   .tl .orig { position:absolute; top:0; bottom:0; border:1px dashed #556; border-radius:6px; pointer-events:none; }
   .tl .sel { position:absolute; top:0; bottom:0; background:rgba(62,207,142,.28); border-top:2px solid var(--ok); border-bottom:2px solid var(--ok); pointer-events:none; }
   .tl .h { position:absolute; top:-4px; bottom:-4px; width:14px; margin-left:-7px; background:#fc3; border-radius:4px; cursor:ew-resize; touch-action:none; }
+  .pvrow { display:flex; gap:12px; align-items:flex-start; }
+  .pvwrap { position:relative; flex:1; min-width:0; }
+  .cov { position:absolute; inset:0; pointer-events:none; }
+  .cbox { position:absolute; border:2px solid; pointer-events:auto; cursor:move; touch-action:none; }
+  .cbox.cam { border-color:#3ecf8e; background:rgba(62,207,142,.12); }
+  .cbox.game { border-color:#4aa3ff; background:rgba(74,163,255,.10); }
+  .cbox .tag { position:absolute; top:0; left:0; font:11px/1.4 system-ui; padding:0 5px; color:#000; }
+  .cbox.cam .tag { background:#3ecf8e; } .cbox.game .tag { background:#4aa3ff; }
+  .cbox .rz { position:absolute; right:-8px; bottom:-8px; width:16px; height:16px; border-radius:4px; cursor:nwse-resize; touch-action:none; }
+  .cbox.cam .rz { background:#3ecf8e; } .cbox.game .rz { background:#4aa3ff; }
+  .mini { width:108px; height:192px; background:#000; border-radius:6px; flex:none; }
+  .seg button.on { background:var(--acc); color:#fff; border-color:var(--acc); }
   .tl .h:focus { outline:2px solid #fff; outline-offset:1px; }
   .tl .h::after { content:""; position:absolute; left:6px; top:12px; bottom:12px; width:2px; background:#653; }
   .tl .ph { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; }
@@ -217,10 +229,22 @@ async function loadPanel(card, p) {
   let d;
   try { d = await api("GET", url); } catch (e) { p.innerHTML = `<span class="perr">${esc(e.message)}</span>`; return; }
   const S = {card, p, name, url, w: d.window, inT: d.window.start, outT: d.window.end,
-             cuts: [], audio: [], chat: [], posts: d.posts, locked: d.locked, proxy: false, busy: false};
+             cuts: [], audio: [], chat: [], posts: d.posts, locked: d.locked, proxy: false, busy: false,
+             cropDefault: d.crop_default};
+  S.crop = JSON.parse(JSON.stringify(d.window.crop || d.crop_default));
   p.innerHTML = `
     <h4>Schnitt</h4>
-    <video class="pv" playsinline preload="metadata"></video>
+    <div class="pvrow">
+      <div class="pvwrap"><video class="pv" playsinline preload="metadata"></video>
+        <div class="cov" style="display:none"><div class="cbox game"><span class="tag">Spiel</span><div class="rz"></div></div><div class="cbox cam"><span class="tag">Facecam</span><div class="rz"></div></div></div></div>
+      <canvas class="mini" width="216" height="384" style="display:none" title="So sieht das Hochformat aus"></canvas>
+    </div>
+    <div class="row seg" data-a="croprow" style="display:none">
+      <span class="pnote">Bildausschnitt:</span>
+      <button type="button" class="sec" data-l="split">Facecam oben + Spiel</button>
+      <button type="button" class="sec" data-l="crop">nur Spiel</button>
+      <button type="button" class="sec" data-a="cropdef">Standard</button>
+      <span class="pnote">Rahmen ziehen · Ecke = Größe</span></div>
     <div class="row"><button type="button" class="sec" data-a="play">▶ Vorschau In→Out</button>
       <label title="Griffe rasten im Umkreis von 0,4 s an Satzgrenzen ein (Alt beim Ziehen: aus)"><input type="checkbox" data-a="snap"> an Sätzen einrasten</label>
       <span class="pnote" data-a="pvnote"></span></div>
@@ -299,7 +323,9 @@ async function loadPanel(card, p) {
   S.pv.addEventListener("click", toggle);
   S.pv.addEventListener("play", () => { q('[data-a="play"]').textContent = "⏸ Stopp"; });
   S.pv.addEventListener("pause", () => { q('[data-a="play"]').textContent = "▶ Vorschau In→Out"; });
-  q('[data-a="render"]').onclick = () => runTrim(S, "/trim", {start: S.inT, end: S.outT});
+  q('[data-a="render"]').onclick = () => runTrim(S, "/trim",
+    S.w.mode === "source" ? {start: S.inT, end: S.outT, crop: S.crop} : {start: S.inT, end: S.outT});
+  initCrop(S);
   q('[data-a="reset"]').onclick = () => { if (confirm("Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
   q('[data-a="tags"]').onclick = async () => {
     if (!confirm("Text durch neuen Vorschlag mit neuen KI-Tags ersetzen?")) return;
@@ -347,6 +373,7 @@ function setPreviewSrc(S) {
   const note = S.q('[data-a="pvnote"]');
   const clipUrl = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
   S.pvSeg = false;
+  showCrop(S, false);
   S.pv.src = clipUrl;
   S.pv.addEventListener("loadedmetadata", () => seek(S, S.inT), {once: true});
   if (S.w.mode !== "source") { note.textContent = ""; return; }
@@ -359,6 +386,7 @@ function setPreviewSrc(S) {
     const playing = !S.pv.paused;
     const t = S.pv.currentTime + pvOffset(S);
     S.pvSeg = true;
+    showCrop(S, true);
     S.pv.src = BASE + want;
     S.pv.addEventListener("loadedmetadata", () => { seek(S, t); if (playing) S.pv.play().catch(() => {}); }, {once: true});
     note.textContent = "";
@@ -368,6 +396,101 @@ function setPreviewSrc(S) {
   }, {once: true});
   probe.src = BASE + want;
 }
+// ---------------------------------------------------------------- crop editor
+// Boxes are fractions of the source frame. Aspect is locked to what the box fills in
+// the 1080x1920 output: split = two 1080x960 halves (9:8), "nur Spiel" = 9:16.
+const OUT_ASPECT = {split: 9 / 8, crop: 9 / 16};
+const cropKey = c => JSON.stringify(c, (k, v) => typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
+function cropBaseline(S) { return S.w.crop || S.cropDefault; }
+function cropDirty(S) {
+  if (S.w.mode !== "source" || !S.crop) return false;
+  // compare against the baseline after the same aspect fitting the editor applies,
+  // otherwise an untouched clip would count as changed and block sending
+  const r = cropBaseline(S), b0 = {layout: r.layout, game: fitBox(S, r.game, OUT_ASPECT[r.layout])};
+  if (r.layout === "split") b0.cam = fitBox(S, r.cam || S.cropDefault.cam, OUT_ASPECT.split);
+  const a = {layout: S.crop.layout, game: S.crop.game}, b = {layout: b0.layout, game: b0.game};
+  if (S.crop.layout === "split") { a.cam = S.crop.cam; b.cam = b0.cam; }
+  return cropKey(a) !== cropKey(b);
+}
+function srcAspect(S) { return (S.pv.videoWidth && S.pv.videoHeight) ? S.pv.videoWidth / S.pv.videoHeight : 16 / 9; }
+// rendered video content rect inside the element (object-fit: contain letterboxing)
+function contentRect(S) {
+  const r = S.pv.getBoundingClientRect(), a = srcAspect(S);
+  let w = r.width, h = r.width / a;
+  if (h > r.height) { h = r.height; w = h * a; }
+  return {left: (r.width - w) / 2, top: (r.height - h) / 2, width: w, height: h};
+}
+function fitBox(S, b, outA) {          // lock aspect (keep width), clamp inside the frame
+  const fa = srcAspect(S);
+  let w = Math.min(1, Math.max(0.05, b.w)), h = w * fa / outA;
+  if (h > 1) { h = 1; w = outA / fa; }
+  const x = Math.min(1 - w, Math.max(0, b.x)), y = Math.min(1 - h, Math.max(0, b.y));
+  return {x, y, w, h};
+}
+function showCrop(S, on) {
+  const src = S.w.mode === "source";
+  S.q(".cov").style.display = on && src ? "" : "none";
+  S.q(".mini").style.display = on && src ? "" : "none";
+  S.q('[data-a="croprow"]').style.display = src ? "" : "none";
+  if (on && src) { layoutCrop(S); drawCrop(S); }
+}
+function layoutCrop(S) {
+  const c = S.crop;
+  c.game = fitBox(S, c.game, OUT_ASPECT[c.layout]);
+  if (c.layout === "split") c.cam = fitBox(S, c.cam || S.cropDefault.cam, OUT_ASPECT.split);
+  S.p.querySelectorAll("[data-l]").forEach(b => b.classList.toggle("on", b.dataset.l === c.layout));
+  S.q(".cbox.cam").style.display = c.layout === "split" ? "" : "none";
+}
+function drawCrop(S) {
+  const cr = contentRect(S), c = S.crop;
+  const place = (el, b) => { if (!b) return;
+    el.style.left = (cr.left + b.x * cr.width) + "px"; el.style.top = (cr.top + b.y * cr.height) + "px";
+    el.style.width = (b.w * cr.width) + "px"; el.style.height = (b.h * cr.height) + "px"; };
+  place(S.q(".cbox.game"), c.game);
+  if (c.layout === "split") place(S.q(".cbox.cam"), c.cam);
+}
+function drawMini(S) {
+  if (!S.p.isConnected) return;
+  requestAnimationFrame(() => drawMini(S));
+  const cv = S.q(".mini");
+  if (cv.style.display === "none" || !S.pv.videoWidth) return;
+  const g = cv.getContext("2d"), W = S.pv.videoWidth, H = S.pv.videoHeight, c = S.crop;
+  const blit = (b, dy, dh) => { if (b) try { g.drawImage(S.pv, b.x * W, b.y * H, b.w * W, b.h * H, 0, dy, cv.width, dh); } catch (e) {} };
+  if (c.layout === "split") { blit(c.cam, 0, cv.height / 2); blit(c.game, cv.height / 2, cv.height / 2); }
+  else blit(c.game, 0, cv.height);
+}
+function initCrop(S) {
+  const cov = S.q(".cov");
+  for (const which of ["cam", "game"]) {
+    const el = S.q(`.cbox.${which}`), rz = el.querySelector(".rz");
+    let mode = null, sx = 0, sy = 0, start = null;
+    el.addEventListener("pointerdown", ev => {
+      ev.preventDefault(); ev.stopPropagation(); el.setPointerCapture(ev.pointerId);
+      mode = ev.target === rz ? "rz" : "mv"; sx = ev.clientX; sy = ev.clientY; start = {...S.crop[which]};
+    });
+    el.addEventListener("pointermove", ev => {
+      if (!mode) return;
+      const cr = contentRect(S), dx = (ev.clientX - sx) / cr.width, dy = (ev.clientY - sy) / cr.height;
+      const outA = OUT_ASPECT[which === "cam" ? "split" : S.crop.layout];
+      S.crop[which] = fitBox(S, mode === "mv" ? {...start, x: start.x + dx, y: start.y + dy}
+                                               : {...start, w: start.w + dx}, outA);
+      drawCrop(S); update(S);
+    });
+    const up = () => { mode = null; };
+    el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  }
+  S.p.querySelectorAll("[data-l]").forEach(b => b.onclick = () => {
+    S.crop.layout = b.dataset.l;
+    if (S.crop.layout === "split" && !S.crop.cam) S.crop.cam = {...S.cropDefault.cam};
+    layoutCrop(S); drawCrop(S); update(S);
+  });
+  S.q('[data-a="cropdef"]').onclick = () => {
+    S.crop = JSON.parse(JSON.stringify(S.cropDefault)); layoutCrop(S); drawCrop(S); update(S);
+  };
+  new ResizeObserver(() => { if (cov.style.display !== "none") drawCrop(S); }).observe(S.pv);
+  drawMini(S);
+}
+
 function seek(S, t) {
   const off = pvOffset(S);
   let x = t - off;
@@ -430,7 +553,7 @@ function update(S) {
     `<b${cls(!ck.ok.tiktok)}>TikTok ${ck.chars}/4000</b> · <b${cls(ck.chars > 2200)}>Insta ${ck.chars}/2200</b> · ` +
     `<b${cls(ck.tags > 30)}>${ck.tags}/30 Hashtags</b> · 🔗 ${ck.links} Link${ck.links === 1 ? "" : "s"}`;
   q('[data-a="threads"]').disabled = !ig;
-  const dirty = Math.abs(S.inT - S.w.start) > 0.05 || Math.abs(S.outT - S.w.end) > 0.05;
+  const dirty = Math.abs(S.inT - S.w.start) > 0.05 || Math.abs(S.outT - S.w.end) > 0.05 || cropDirty(S);
   const later = S.p.querySelector('input[value="later"]').checked;
   const errs = plats.filter(p => !ck.ok[p]).map(p => ck.err[p]);
   let why = "";
@@ -458,6 +581,7 @@ async function runTrim(S, path, body) {
   try {
     const r = await api("POST", S.url + path, body || null);
     S.w = r.window; S.inT = S.w.start; S.outT = S.w.end;
+    S.crop = JSON.parse(JSON.stringify(S.w.crop || S.cropDefault));
     setPreviewSrc(S);
     const cv = S.card.querySelector(":scope > video");
     if (cv) cv.src = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;

@@ -263,32 +263,61 @@ def window(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict) -> dic
         if dur:
             hi = min(hi, dur)
         return {"kind": kind, "mode": "source", "source": True, "start": start, "end": end,
-                "min": lo, "max": hi, "orig_start": o_start, "orig_end": o_end}
+                "min": lo, "max": hi, "orig_start": o_start, "orig_end": o_end,
+                "crop": PostStore(vod_dir).get(clip).get("crop")}
     length = clip_stage.probe_duration(vod_dir / "clips" / clip)
     return {"kind": kind, "mode": "clip", "source": _source(vod_dir).exists(), "start": 0.0,
-            "end": length, "min": 0.0, "max": length, "orig_start": 0.0, "orig_end": length}
+            "end": length, "min": 0.0, "max": length, "orig_start": 0.0, "orig_end": length,
+            "crop": None}
+
+
+LAYOUTS = ("split", "crop")  # split: facecam top / game bottom; crop: game fills 9:16
+
+
+def _box(b) -> dict:
+    try:
+        x, y, w, h = (float(b[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("Bildausschnitt: Rahmen unvollständig")
+    if not (0 <= x and 0 <= y and 0.02 <= w and 0.02 <= h and x + w <= 1.001 and y + h <= 1.001):
+        raise ValueError("Bildausschnitt: Rahmen liegt außerhalb des Bildes")
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def validate_crop(crop: dict) -> dict:
+    """{"layout": "split"|"crop", "cam": box (split only), "game": box}, boxes as frame fractions."""
+    if not isinstance(crop, dict) or crop.get("layout") not in LAYOUTS:
+        raise ValueError("Bildausschnitt: Layout muss split oder crop sein")
+    out = {"layout": crop["layout"], "game": _box(crop.get("game"))}
+    if out["layout"] == "split":
+        out["cam"] = _box(crop.get("cam"))
+    return out
 
 
 def _render_source(vod_dir: Path, clip: str, start: float, end: float, moments, cfg,
-                   facecam, segments) -> None:
+                   facecam, segments, crop: dict | None = None) -> None:
     from . import clip as clip_stage
 
     c = cfg.get("clip") or {}
+    layout = crop["layout"] if crop else c.get("layout", "split")
     clip_stage.render_custom(
         _source(vod_dir), vod_dir / "clips" / clip,
         start=start, duration=end - start,
         width=c.get("width", 1080), height=c.get("height", 1920),
-        layout=c.get("layout", "split"), facecam=facecam, game=None,
+        layout=layout, facecam=(crop.get("cam") if crop else facecam),
+        game=(crop["game"] if crop else None),
         segments=segments, burn_subtitles=bool(c.get("burn_subtitles", False)),
         title=_moment(clip, moments).get("title", ""),
     )
 
 
 def apply_trim(vod_dir: Path, clip: str, start: float, end: float, moments: dict[int, dict],
-               cfg: dict, facecam: dict | None, segments) -> dict:
+               cfg: dict, facecam: dict | None, segments, crop: dict | None = None) -> dict:
     from . import clip as clip_stage
 
     vod_dir = Path(vod_dir)
+    if crop is not None:
+        crop = validate_crop(crop)
     store = PostStore(vod_dir)
     if is_locked(store.get(clip)):
         raise LockedError("erst Post abbrechen")
@@ -298,9 +327,12 @@ def apply_trim(vod_dir: Path, clip: str, start: float, end: float, moments: dict
         raise ValueError(f"Clip muss mindestens {MIN_LEN_S:g} s lang sein")
     if start < w["min"] - 0.01 or end > w["max"] + 0.01:
         raise ValueError("Schnitt außerhalb des verfügbaren Bereichs")
+    if crop is not None and w["mode"] != "source":
+        raise ValueError("Bildausschnitt geht nur, solange das Original-VOD da ist")
     if w["mode"] == "source":
-        _render_source(vod_dir, clip, start, end, moments, cfg, facecam, segments)
-        store.update(clip, trim={"mode": "source", "start": start, "end": end})
+        crop = crop or store.get(clip).get("crop")
+        _render_source(vod_dir, clip, start, end, moments, cfg, facecam, segments, crop)
+        store.update(clip, trim={"mode": "source", "start": start, "end": end}, crop=crop)
     else:
         path = vod_dir / "clips" / clip
         backup = vod_dir / "clips" / ".orig" / clip
@@ -327,5 +359,5 @@ def reset_trim(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict,
         os.replace(backup, vod_dir / "clips" / clip)
     else:
         raise ValueError("nichts zurückzusetzen")
-    store.update(clip, trim=None)
+    store.update(clip, trim=None, crop=None)
     return window(vod_dir, clip, moments, cfg)

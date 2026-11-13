@@ -283,3 +283,20 @@ def test_preview_cuts_window_from_source_once(client, vod, monkeypatch):
 
 def test_preview_404_without_source(client, vod):
     assert client.get(URL + "/preview").status_code == 404
+
+
+def test_trim_route_passes_crop(client, vod, monkeypatch):
+    (vod / "555.mp4").write_bytes(b"SRC")
+    seen = {}
+    monkeypatch.setattr(clip_stage, "render_custom", lambda s, o, **k: seen.update(k) or o.write_bytes(b"R") or o)
+    crop = {"layout": "crop", "game": {"x": 0.3, "y": 0, "w": 0.32, "h": 1.0}}
+    r = client.post(URL + "/trim", json={"start": 95, "end": 125, "crop": crop})
+    assert r.status_code == 200 and seen["layout"] == "crop" and r.json()["window"]["crop"] == crop
+
+
+def test_panel_crop_default_uses_facecam(client, vod):
+    (vod / "555.mp4").write_bytes(b"SRC")
+    (vod / "facecam.json").write_text(json.dumps({"x": 0.75, "y": 0.02, "w": 0.24, "h": 0.3}))
+    d = client.get(URL).json()["crop_default"]
+    assert d["cam"] == {"x": 0.75, "y": 0.02, "w": 0.24, "h": 0.3} and d["layout"] in ("split", "crop")
+    assert 0 < d["game"]["w"] <= 1 and d["game"]["h"] == 1
