@@ -110,6 +110,32 @@ services:
       retries: 40
       start_period: 900s   # first start downloads the ~1.6 GB model
 
+  # Optional portal: https://<BOX_DOMAIN>/ with a real certificate (Cloudflare
+  # DNS-01), / = portal page, /vod/ = app, /system/ = Cockpit. Off unless
+  # COMPOSE_PROFILES=proxy is in .env; set up by proxy/enable.sh.
+  proxy:
+    profiles: ["proxy"]
+    build:
+      context: ../caddy
+    image: clipbox-proxy:local
+    container_name: clipbox-proxy
+    restart: unless-stopped
+    environment:
+      BOX_DOMAIN: "${BOX_DOMAIN:-localhost}"
+      CF_API_TOKEN: "${CF_API_TOKEN:-}"
+    ports:
+      - "80:80"
+      - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./proxy/portal:/srv/portal:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   ollama:
   whisper-models:
+  caddy-data:
+  caddy-config:

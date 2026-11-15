@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>ClipBox</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#f0f0f0; --card:#fff; --fg:#151515; --mut:#6a6e73; --line:#d2d2d2; --blue:#0066cc; --green:#3e8635; --red:#c9190b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --card:#212427; --fg:#f0f0f0; --mut:#b8bbbe; --line:#3c3f42; --blue:#73bcf7; --green:#5ba352; --red:#f0561d; } }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; padding:48px 16px; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:860px; margin:0 auto; }
+  h1 { font-size:28px; line-height:1.2; margin:0; }
+  .lead { color:var(--mut); margin:6px 0 28px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; }
+  a.tile { display:block; padding:18px 20px; background:var(--card); border:1px solid var(--line); border-radius:10px; color:inherit; text-decoration:none; transition:border-color .15s, transform .15s; }
+  a.tile:hover, a.tile:focus-visible { border-color:var(--blue); transform:translateY(-1px); outline:none; }
+  .tile b { display:flex; align-items:center; gap:8px; font-size:17px; }
+  .tile span { display:block; color:var(--mut); font-size:14px; margin-top:4px; }
+  .tile small { display:block; color:var(--blue); font-size:13px; margin-top:10px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--mut); flex:none; }
+  .dot.up { background:var(--green); } .dot.down { background:var(--red); }
+  @media (prefers-reduced-motion: reduce) { a.tile { transition:none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>ClipBox</h1>
+  <p class="lead">Alle Oberflächen dieser Box. Nur im Heimnetz erreichbar.</p>
+  <div class="grid">
+    <a class="tile" href="/vod/" data-probe="/vod/health"><b><i class="dot"></i>Clips</b><span>VODs verarbeiten, Clips schneiden, aufs Handy posten</span><small>/vod/</small></a>
+    <a class="tile" href="/system/clipbox-gpu" data-probe="/system/"><b><i class="dot"></i>Monitor</b><span>GPU, Temperaturen, laufender Job, Modelltempo</span><small>/system/clipbox-gpu</small></a>
+    <a class="tile" href="/system/" data-probe="/system/"><b><i class="dot"></i>System</b><span>Cockpit: Dienste, Logs, Updates, Terminal, Speicher</span><small>/system/</small></a>
+  </div>
+</main>
+<script>
+  document.querySelector("h1").textContent = location.hostname;
+  document.querySelectorAll("a[data-probe]").forEach(async (a) => {
+    const dot = a.querySelector(".dot");
+    try { const r = await fetch(a.dataset.probe, { cache: "no-store" }); dot.classList.add(r.status < 500 ? "up" : "down"); }
+    catch (e) { dot.classList.add("down"); }
+  });
+</script>
+</body>
+</html>

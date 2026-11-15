@@ -107,7 +107,7 @@
     const vid = (String(job.vod).match(/(\d{6,})/) || [])[1];
     const [info, m, run] = await Promise.all([vid ? readJson(`${DATA}/${vid}/info.json`) : null, vid ? readJson(`${DATA}/${vid}/metrics.json`) : null, vid ? readJson(`${DATA}/${vid}/run.json`) : null]);
     const now = Date.now() / 1000, running = job.status === "running";
-    $("j-title").innerHTML = (info ? `${info.streamer}: ${info.title}` : job.vod) + ` <a href="http://${location.hostname}:9443/jobs/${job.id}" target="_blank" style="font-weight:400;font-size:13px;margin-left:8px">Job ${job.id}</a>`;
+    $("j-title").innerHTML = (info ? `${info.streamer}: ${info.title}` : job.vod) + ` <a href="${location.port === "9090" ? `http://${location.hostname}:9443` : `${location.origin}/vod`}/jobs/${job.id}" target="_blank" style="font-weight:400;font-size:13px;margin-left:8px">Job ${job.id}</a>`;
     const st = $("j-status"); st.className = "status " + job.status;
     st.textContent = { running: "läuft", queued: "wartet", done: "fertig", error: "Fehler", interrupted: "unterbrochen", cancelled: "abgebrochen" }[job.status] || job.status;
     if (!m) { $("timeline").innerHTML = ""; return; }

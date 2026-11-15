@@ -94,7 +94,13 @@ IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | head -1)
 [[ -n "$IP" ]] || IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)
 [[ -n "$IP" ]] || fail "no IPv4 address yet (network not up?)"
 PORT=$(grep -E '^WEB_PORT=' "$ENV_FILE" | cut -d= -f2); PORT=${PORT:-9443}
-set_env PUBLIC_URL "http://${IP}:${PORT}"
+# With the portal enabled (proxy/enable.sh) the app lives at https://<BOX_DOMAIN>/vod.
+BOX_DOMAIN=$(grep -E '^BOX_DOMAIN=' "$ENV_FILE" | cut -d= -f2)
+if [[ -n "$BOX_DOMAIN" ]]; then
+  set_env PUBLIC_URL "https://${BOX_DOMAIN}/vod"
+else
+  set_env PUBLIC_URL "http://${IP}:${PORT}"
+fi
 
 # 3b. model names: config.yaml is the source of truth for Ollama, .env for whisper
 TEXT_MODEL=$(cfg_value text_model); VISION_MODEL=$(cfg_value vision_model)

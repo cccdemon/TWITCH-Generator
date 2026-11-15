@@ -1,0 +1,34 @@
+# ClipBox portal (optional, compose profile "proxy"; see proxy/enable.sh).
+# One LAN-only hostname with a real certificate: the box is not reachable from
+# the internet, so the certificate comes from the Cloudflare DNS-01 challenge.
+#
+#   /          portal page (links to every UI on the box)
+#   /vod/*     ClipBox web UI   (prefix stripped; the app runs with ROOT_PATH=/vod)
+#   /system/*  Cockpit          (prefix kept; cockpit.conf has UrlRoot=/system)
+{
+	acme_dns cloudflare {env.CF_API_TOKEN}
+}
+
+{$BOX_DOMAIN} {
+	encode zstd gzip
+
+	redir /vod /vod/
+	handle_path /vod/* {
+		reverse_proxy app:9443
+	}
+
+	redir /system /system/
+	handle /system/* {
+		# Cockpit keeps its own self-signed TLS on the host; this hop never leaves the box.
+		reverse_proxy https://host.docker.internal:9090 {
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+	}
+
+	handle {
+		root * /srv/portal
+		file_server
+	}
+}

@@ -77,6 +77,36 @@ Im Job-Log (Web-UI oder `dc logs app`) stehen pro Lauf:
 - `whisper: backend=whispercpp-server …` und `whisper: chunk k/n` — 30-min-Chunk sollte in 1–3 min durch sein (Faktor ≫ 10×).
 - `llm: prompt ≈N tokens vs num_ctx …` — Warnung, wenn ein Prompt nahe am Kontextfenster liegt (Ollama schneidet still ab). Dann `llm.ollama.num_ctx.text` erhöhen oder `analyze.max_clips`/`score.candidate_factor` senken.
 
+### Portal mit eigenem Namen und Zertifikat (optional)
+
+Ein Hostname im Heimnetz mit echtem Zertifikat vor allen Oberflächen der Box:
+
+| Pfad | Ziel |
+|---|---|
+| `https://<domain>/` | Portal-Seite (`proxy/portal/index.html`) mit Kacheln und Statuspunkten |
+| `/vod/` | ClipBox-Weboberfläche (App läuft dann mit `ROOT_PATH=/vod`) |
+| `/system/` | Cockpit (`UrlRoot=/system`), Monitor unter `/system/clipbox-gpu` |
+
+Die Box bleibt von außen unerreichbar: der DNS-Eintrag zeigt auf die private
+LAN-Adresse, das Zertifikat holt Caddy über die Cloudflare-DNS-01-Challenge
+(nur ausgehende Verbindungen). Einrichtung:
+
+1. DNS-A-Record `<domain>` → LAN-IP der Box (Cloudflare, „DNS only").
+2. `CF_API_TOKEN=<Token mit Zone:DNS:Edit>` in `deploy/local/.env`.
+3. `sudo bash deploy/local/proxy/enable.sh <domain>`
+
+Das Skript setzt `BOX_DOMAIN`, `COMPOSE_PROFILES=proxy`, `ROOT_PATH=/vod` und
+`PUBLIC_URL` in `.env`, schreibt `/etc/cockpit/cockpit.conf`, baut und startet
+den Container `clipbox-proxy` (Ports 80/443) und erstellt die App neu. Läuft
+gerade ein Job, bleibt die App unangetastet (ein Neustart bricht ihn ab); dann
+das Skript nach Job-Ende noch einmal ausführen.
+
+Folgen: der Direktzugriff `http://<ip>:9443` taugt danach nur noch für
+`/health` (Links tragen das Präfix `/vod`), Cockpit direkt liegt unter
+`https://<ip>:9090/system/`. Löst ein Gerät den Namen nicht auf, blockt meist
+der DNS-Rebind-Schutz des Routers (FRITZ!Box: Heimnetz → Netzwerk →
+Netzwerkeinstellungen → DNS-Rebind-Schutz, Namen eintragen).
+
 ### Modelle tauschen
 
 1. `config.yaml`: `llm.ollama.text_model` / `vision_model` ändern (z. B. `qwen3:8b`, `qwen3-vl:4b`).
