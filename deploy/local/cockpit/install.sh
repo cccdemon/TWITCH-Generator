@@ -15,6 +15,8 @@ fi
 systemctl enable --now pmcd pmlogger >/dev/null 2>&1 || true
 
 mkdir -p "$DEST"
-cp "$HERE/clipbox-gpu/manifest.json" "$HERE/clipbox-gpu/index.html" "$DEST/"
+# Cockpit's CSP blocks inline <script>; the page logic lives in monitor.js,
+# inline styles are allowed through the manifest's content-security-policy.
+cp "$HERE/clipbox-gpu/manifest.json" "$HERE/clipbox-gpu/index.html" "$HERE/clipbox-gpu/monitor.js" "$DEST/"
 chmod 644 "$DEST"/*
 echo "cockpit plugin installed: $DEST (reload the Cockpit page: menu entry 'GPU & Sensoren')"
