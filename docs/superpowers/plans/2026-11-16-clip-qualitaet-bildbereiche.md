@@ -79,3 +79,46 @@ benutzt. Genau das ist mit dem Wunsch gemeint (Annahme, morgen kurz bestätigen)
    vorhandene Wahl pro Clip?
 2. Layoutname und Aufteilung: ein Drittel / zwei Drittel recht so?
 3. Prod auf `medium` lassen oder ebenfalls `slow`?
+
+---
+
+## Stand 2026-11-16, mittags: umgesetzt (Commit `28a5f8b`, auf der ClipBox ausgerollt)
+
+Entscheidungen des Users: Bereiche pro VOD plus Standard; kein festes neues Layout,
+sondern **Rahmen frei ziehen**; Prod-Encoder bleibt unverändert.
+
+- Abschnitt 1 und 2 wie geplant (`clip._fill`, `clip._venc`; ClipBox `slow`/17).
+- Abschnitt 3 anders: kein Layout `stack`. Der Facecam-Rahmen darf jede Form haben,
+  seine Form ergibt `top` (Höhenanteil der Cam-Zelle, 0.15 bis 0.75); der
+  Content-Rahmen ist auf das Seitenverhältnis des Rests gesperrt.
+- Abschnitt 4 umgesetzt: Seite „Bildbereiche" (`/facecam/{vod}`), `src/regions.py`,
+  Pipeline, Neu-Schnitt und Posten-Panel nutzen die Auswahl.
+- Tests: `tests/test_regions.py`, 78 grün (ohne das fremde, schon vorher rote
+  `tests/test_transcribe_words.py`).
+
+Gemessen auf der Box (VOD 2929825092, 20-s-Clip, 1080×1920): Ausgabe 60 fps;
+`veryfast`/20 → 37,7 s, 2,9 Mbit/s; `slow`/17 → 42,8 s, 4,8 Mbit/s. Die Renderzeit
+hängt also kaum am Preset.
+
+**Befund beim Vorher-Nachher-Bild:** Die für dieses VOD gespeicherte Facecam-Box
+(`x 0.85, y 0, w 0.14, h 0.19`, `manual`) zeigt auf eine leere Ecke. Die Szene ist ein
+Mehrfach-Bild („Alle Bodycams · Live") mit vier kleinen Cams in den Kacheln. Die obere
+Hälfte dieser Clips ist deshalb schwarz. Eine Box pro VOD kann bei wechselnden Szenen
+nicht stimmen.
+
+Noch nicht geprüft: Ziehen der Rahmen im Browser (nur Server-Antworten und
+JS-Syntax geprüft).
+
+## Neue Idee des Users (2026-11-16): erst beim Posten rendern
+
+„Gib mir die Originalstücke, gerendert wird erst, wenn der Clip wirklich gepostet
+werden soll." Noch **nicht** umgesetzt, erst bestätigen lassen. Vorschlag:
+
+- Pipeline schneidet pro Moment ein Rohstück aus dem VOD (Querformat, Stream-Copy mit
+  ±20 s Rand, kein Neukodieren, Sekunden statt Minuten) nach `clips/raw/`.
+- Clips-Seite zeigt das Rohstück; im Posten-Panel wählt man Schnitt und Rahmen für
+  genau diese Szene, „Rendern" erzeugt das Hochformat (eine einzige Kodierung).
+- „Free MB" kann das 12-GB-VOD löschen und die Rohstücke behalten: Schnitt und
+  Bildbereiche bleiben danach änderbar (heute nur noch Kürzen).
+- Zu klären: Download-Knopf (Rohstück oder gerendert), Schalter in `config.yaml`
+  (`clip.auto_render` gibt es schon als „gar nicht rendern"), Umgang mit alten Clips.
