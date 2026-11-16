@@ -16,6 +16,7 @@
   .body { padding:12px 14px; display:flex; flex-direction:column; gap:6px; }
   .title { font-weight:600; font-size:14px; }
   .badge { font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); color:var(--mut); }
+  .badge.rawbadge { border-color:#b8860b; color:#f0c674; }
   .scores { font-size:12px; color:var(--mut); }
   .muted { color:var(--mut); }
   .dl { margin-top:4px; }
@@ -97,10 +98,10 @@
 </header>
 <main>
   {% if message %}<div style="background:#16223a;border:1px solid #244;color:#bfe;padding:10px 14px;border-radius:8px;margin-bottom:16px">{{ message }}</div>{% endif %}
-  {% if not clips %}<p class="muted" id="empty">No clips rendered yet — open the <a href="{{ base }}/edit/{{ vod }}">✂ Editor</a> to cut clips from the detected highlights.</p>{% endif %}
+  {% if not clips %}<p class="muted" id="empty">No clips yet — open the <a href="{{ base }}/edit/{{ vod }}">✂ Editor</a> to cut clips from the detected highlights.</p>{% endif %}
   <div class="grid" id="grid">
     {% for c in clips %}
-    <div class="clip" data-name="{{ c.name }}" data-post-status="{{ post_state.get(c.name, '') }}">
+    <div class="clip" data-name="{{ c.name }}" data-rendered="{{ 1 if c.rendered else 0 }}" data-raw="{{ 1 if c.raw else 0 }}" data-post-status="{{ post_state.get(c.name, '') }}">
       <video controls preload="metadata" src="{{ base }}/clips/{{ vod }}/{{ c.name }}"></video>
       <div class="body">
         <span class="title">{{ c.title }}</span>
@@ -112,7 +113,7 @@
         <span class="scores">a={{ "%.2f"|format(c.audio) }} · t={{ "%.2f"|format(c.text) }} · v={{ "%.2f"|format(c.video) }}</span>
         {% endif %}
         <span class="muted" style="font-size:12px">{{ c.size_mb }} MB</span>
-        <div class="dl"><a href="{{ base }}/clips/{{ vod }}/{{ c.name }}" download="{{ c.name }}"><button type="button">Download</button></a>
+        <div class="dl"><a class="dlmain" href="{{ base }}/clips/{{ vod }}/{{ c.name }}" download="{{ c.name }}"><button type="button">Download</button></a>
           {% if tiktok and tiktok.connected %}<form method="post" action="{{ base }}/clips/{{ vod }}/{{ c.name }}/tiktok" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='uploading…'"><button type="submit" class="tt">▶ TikTok</button></form>{% endif %}</div>
       </div>
     </div>
@@ -125,6 +126,7 @@ function fmt(n) { return (n === null || n === undefined) ? "" : n.toFixed(2); }
 function card(c) {
   const el = document.createElement('div');
   el.className = 'clip'; el.dataset.name = c.name;
+  el.dataset.rendered = c.rendered ? "1" : "0"; el.dataset.raw = c.raw ? "1" : "0";
   const src = `${BASE}/clips/${VOD}/${c.name}`;
   const cat = c.category ? `<span class="badge">${c.category}</span>` : '';
   const score = (c.score !== null && c.score !== undefined) ? `<span class="badge">score ${fmt(c.score)}</span>` : '';
@@ -135,7 +137,7 @@ function card(c) {
     `<div class="body"><span class="title">${c.title}</span>`+
     `<span>${cat} ${score}</span>${scores}`+
     `<span class="muted" style="font-size:12px">${c.size_mb} MB</span>`+
-    `<div class="dl"><a href="${src}" download="${c.name}"><button type="button">Download</button></a>`+
+    `<div class="dl"><a class="dlmain" href="${src}" download="${c.name}"><button type="button">Download</button></a>`+
     (TIKTOK ? `<form method="post" action="${src}/tiktok" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='uploading…'"><button type="submit" class="tt">▶ TikTok</button></form>` : '')+
     `</div></div>`;
   addPost(el);
@@ -153,6 +155,29 @@ async function refresh() {
     document.getElementById('progress').style.display = busy ? '' : 'none';
     if (busy) setTimeout(refresh, 3000);
   } catch (e) {}
+}
+// ---------------------------------------------------------------- raw pieces
+// Render-at-post: a clip starts as a raw landscape piece of the VOD and gets its
+// vertical render from the post panel. The card says which of the two it shows.
+function markRaw(card) {
+  const rendered = card.dataset.rendered !== "0", raw = card.dataset.raw === "1";
+  let b = card.querySelector(".rawbadge");
+  if (!rendered) {
+    if (!b) { b = document.createElement("span"); b.className = "badge rawbadge";
+      b.title = "Unbearbeitetes Stück aus dem VOD. Schnitt und Bildbereiche wählen, dann rendern.";
+      card.querySelector(".title").after(b); }
+    b.textContent = "Rohstück · noch nicht gerendert";
+  } else if (b) b.remove();
+  const main = card.querySelector(".dlmain");
+  if (main) main.querySelector("button").textContent = rendered ? "Download" : "Download Rohstück";
+  let extra = card.querySelector(".dlraw");
+  if (rendered && raw) {
+    if (!extra && main) { extra = document.createElement("a"); extra.className = "dlraw";
+      extra.href = main.getAttribute("href").split("?")[0] + "?raw=1";
+      extra.download = "raw_" + card.dataset.name;
+      extra.innerHTML = '<button type="button" class="sec" title="Das unbearbeitete Stück aus dem VOD">Rohstück</button>';
+      main.after(extra); }
+  } else if (extra) extra.remove();
 }
 // ---------------------------------------------------------------- phone posting
 const POSTING = document.body.dataset.posting === "1";
@@ -203,8 +228,9 @@ function addPost(card) {
   const name = card.dataset.name, st = card.dataset.postStatus || "";
   const dl = card.querySelector(".dl");
   const b = document.createElement("button");
-  b.type = "button"; b.className = "pbtn"; b.textContent = "📱 Posten";
-  if (!POSTING) { b.disabled = true; b.title = "Handy-Dienst in den Settings eintragen"; }
+  b.type = "button"; b.className = "pbtn"; b.textContent = POSTING ? "📱 Posten" : "✂ Schneiden";
+  if (!POSTING) b.title = "Schnitt und Bildbereiche wählen, rendern. Zum Posten den Handy-Dienst in den Settings eintragen.";
+  markRaw(card);
   b.onclick = () => togglePanel(card);
   dl.appendChild(b);
   if (st) {
@@ -326,7 +352,7 @@ async function loadPanel(card, p) {
   q('[data-a="render"]').onclick = () => runTrim(S, "/trim",
     S.w.mode === "source" ? {start: S.inT, end: S.outT, crop: S.crop} : {start: S.inT, end: S.outT});
   initCrop(S);
-  q('[data-a="reset"]').onclick = () => { if (confirm("Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
+  q('[data-a="reset"]').onclick = () => { if (confirm(S.w.raw ? "Gerenderten Clip verwerfen und zum Rohstück zurück?" : "Ursprünglichen Schnitt wiederherstellen?")) runTrim(S, "/reset"); };
   q('[data-a="tags"]').onclick = async () => {
     if (!confirm("Text durch neuen Vorschlag mit neuen KI-Tags ersetzen?")) return;
     const b = q('[data-a="tags"]'); b.disabled = true; b.textContent = "KI denkt …";
@@ -367,7 +393,7 @@ async function aiTags(S, suggested) {
 // after the old end. Until it is there (a few seconds) the rendered clip plays.
 function pvOffset(S) {
   if (S.w.mode !== "source") return 0;
-  return S.pvSeg ? S.w.min : S.w.start;
+  return (S.pvSeg || S.w.rendered === false) ? S.w.min : S.w.start;
 }
 function setPreviewSrc(S) {
   const note = S.q('[data-a="pvnote"]');
@@ -569,7 +595,8 @@ function update(S) {
     `<b${cls(!ck.ok.tiktok)}>TikTok ${ck.chars}/4000</b> · <b${cls(ck.chars > 2200)}>Insta ${ck.chars}/2200</b> · ` +
     `<b${cls(ck.tags > 30)}>${ck.tags}/30 Hashtags</b> · 🔗 ${ck.links} Link${ck.links === 1 ? "" : "s"}`;
   q('[data-a="threads"]').disabled = !ig;
-  const dirty = Math.abs(S.inT - S.w.start) > 0.05 || Math.abs(S.outT - S.w.end) > 0.05 || cropDirty(S);
+  const unrendered = S.w.rendered === false;
+  const dirty = unrendered || Math.abs(S.inT - S.w.start) > 0.05 || Math.abs(S.outT - S.w.end) > 0.05 || cropDirty(S);
   const later = S.p.querySelector('input[value="later"]').checked;
   const errs = plats.filter(p => !ck.ok[p]).map(p => ck.err[p]);
   let why = "";
@@ -586,7 +613,8 @@ function update(S) {
   q('[data-a="render"]').disabled = S.locked || S.busy || !dirty;
   q('[data-a="reset"]').disabled = S.locked || S.busy;
   q('[data-a="rnote"]').textContent = S.locked ? "erst Post abbrechen" :
-    (S.w.mode === "clip" ? "ohne Original-VOD: nur kürzen" : "");
+    (S.w.mode === "clip" ? "ohne Original-VOD: nur kürzen" :
+     unrendered ? "Rohstück: Schnitt und Rahmen wählen, dann rendern" : "");
   drawTl(S);
 }
 
@@ -599,6 +627,7 @@ async function runTrim(S, path, body) {
     S.w = r.window; S.inT = S.w.start; S.outT = S.w.end;
     S.crop = JSON.parse(JSON.stringify(S.w.crop || S.cropDefault));
     setPreviewSrc(S);
+    S.card.dataset.rendered = S.w.rendered === false ? "0" : "1"; markRaw(S.card);
     const cv = S.card.querySelector(":scope > video");
     if (cv) cv.src = `${BASE}/clips/${VOD}/${encodeURIComponent(S.name)}?v=${Date.now()}`;
     api("GET", S.url + "/signals").then(sg => { S.audio = sg.audio; S.chat = sg.chat; S.cuts = sg.cuts; drawSig(S); }).catch(() => {});

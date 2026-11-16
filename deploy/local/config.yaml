@@ -115,6 +115,8 @@ refine:
 
 clip:
   auto_render: true
+  render: on_post              # raw pieces from the pipeline, vertical render in the post panel
+  raw_margin: 20
   vertical: true
   width: 1080
   height: 1920

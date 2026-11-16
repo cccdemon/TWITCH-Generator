@@ -119,6 +119,15 @@ clip:
   # Auto-render clips in the pipeline. false = only detect highlight moments,
   # then render each clip by hand in the web editor (choose crop + trim per clip).
   auto_render: true
+  # When to render the vertical clip:
+  #   "auto"    - the pipeline renders every moment right away.
+  #   "on_post" - the pipeline only cuts a raw piece of the VOD per moment (stream copy,
+  #               seconds, `raw_margin` extra seconds on both sides); the clip is rendered
+  #               from the post panel once cut and picture regions are chosen. One encode,
+  #               nothing rendered that is never posted, and cut + regions stay editable
+  #               after "Free MB" because the raw pieces are kept.
+  render: auto
+  raw_margin: 20
   # Output to 9:16 vertical for Shorts/Reels/TikTok. false = keep source aspect.
   vertical: true
   width: 1080

@@ -1,7 +1,9 @@
 """FFmpeg stage: cut each moment into a (optionally vertical, subtitled) clip."""
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -136,6 +138,11 @@ def _stack_graph(width: int, height: int, cam: dict | None, game: dict | None,
 _CAM_DEFAULT = {"x": 0.78, "y": 0.0, "w": 0.22, "h": 0.22}
 
 
+def clip_name(moment: Moment) -> str:
+    """File stem of a moment's clip: leading start second maps it back to moments.json."""
+    return f"{int(moment.start)}_{moment.category}_{slug(moment.title)}"
+
+
 def render_clip(
     source: Path,
     moment: Moment,
@@ -154,8 +161,7 @@ def render_clip(
     burn_subtitles: bool,
 ) -> Clip:
     out_dir.mkdir(parents=True, exist_ok=True)
-    safe_title = slug(moment.title)
-    name = f"{int(moment.start)}_{moment.category}_{safe_title}"
+    name = clip_name(moment)
     out_path = out_dir / f"{name}.mp4"
 
     start = max(0.0, moment.start - pad_start)
@@ -230,6 +236,7 @@ def render_custom(
     segments: list[TranscriptSegment] | None = None,
     burn_subtitles: bool = False,
     title: str = "",
+    seek: float | None = None,
 ) -> Path:
     """Render one clip from an explicit trim window + crop regions (GUI editor).
 
@@ -237,6 +244,8 @@ def render_custom(
                     0.5 = halves), `game` region below.
     layout "crop":  the whole 9:16 frame is the `game` region (or center crop).
     Boxes are fractions {x,y,w,h} of the source frame; None = full frame.
+    `start` is the VOD second (subtitles are taken from there); `seek` is where that
+    second sits inside `source` when it is a raw piece rather than the whole VOD.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     start = max(0.0, float(start))
@@ -249,7 +258,8 @@ def render_custom(
                    title=title or "clip", reason="")
         has_subs = write_srt(m, segments, srt_path)
 
-    cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(source), "-t", f"{duration:.2f}"]
+    pos = start if seek is None else max(0.0, float(seek))
+    cmd = ["ffmpeg", "-y", "-ss", f"{pos:.2f}", "-i", str(source), "-t", f"{duration:.2f}"]
 
     if layout == "split":
         graph = _stack_graph(width, height, facecam, game, top)
@@ -273,6 +283,107 @@ def render_custom(
     subprocess.run(cmd, check=True)
     os.replace(tmp, out_path)
     return out_path
+
+
+# ------------------------------------------------------------- raw pieces
+def keyframe_at_or_before(source: Path, t: float) -> float:
+    """Timestamp of the last video keyframe at or before `t` (a stream copy can only
+    start on one). Falls back to `t` when ffprobe finds none in the 12 s before it."""
+    lo = max(0.0, float(t) - 12.0)
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+         "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+         "-read_intervals", f"{lo:.3f}%{float(t):.3f}", str(source)],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    best = None
+    for line in out.split():
+        try:
+            v = float(line.strip(","))
+        except ValueError:
+            continue
+        if v <= float(t) + 1e-3:
+            best = v
+    return best if best is not None else max(0.0, float(t))
+
+
+def cut_raw(source: Path, out_dir: Path, name: str, start: float, end: float) -> dict:
+    """Cut [start, end] of the VOD as a raw piece: stream copy, no re-encode.
+
+    The piece starts on the keyframe at or before `start`, so it is frame-identical
+    to the VOD and a later render is still the first and only encode. Writes
+    `<name>.mp4` and `<name>.json` = {"start", "end"} in VOD seconds.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    k = keyframe_at_or_before(source, max(0.0, float(start)))
+    out = out_dir / f"{name}.mp4"
+    tmp = out_dir / f"{name}.mp4.part"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-nostdin", "-ss", f"{k:.3f}", "-i", str(source),
+         "-t", f"{max(1.0, float(end) - k):.3f}", "-map", "0:v:0", "-map", "0:a:0?",
+         "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(tmp)],
+        check=True,
+    )
+    os.replace(tmp, out)
+    info = {"start": round(k, 3), "end": round(k + probe_duration(out), 3)}
+    (out_dir / f"{name}.json").write_text(json.dumps(info), encoding="utf-8")
+    return info
+
+
+def is_fragmented(path: Path) -> bool:
+    """True for a fragmented MP4 (moof boxes). Twitch VODs arrive like that: hundreds of
+    thousands of tiny fragments, so ffmpeg/ffprobe read the whole multi-GB file just to
+    open it (32 s for 12 GB), on every single call."""
+    try:
+        with open(path, "rb") as f:
+            off, size = 0, os.path.getsize(path)
+            for _ in range(8):
+                f.seek(off)
+                head = f.read(16)
+                if len(head) < 8:
+                    return False
+                n, typ = int.from_bytes(head[:4], "big"), head[4:8]
+                if n == 1:
+                    n = int.from_bytes(head[8:16], "big")
+                if typ == b"moof":
+                    return True
+                if typ == b"mdat" or n < 8:
+                    return False
+                off += n
+                if off >= size:
+                    return False
+    except OSError:
+        return False
+    return False
+
+
+def make_seekable(path: Path, log=print) -> bool:
+    """Rewrite a fragmented MP4 as a plain one (stream copy, one index), in place.
+
+    One pass over the file; afterwards every ffmpeg call on it opens instantly.
+    Needs the file's size as free disk space for the moment; skipped otherwise.
+    """
+    path = Path(path)
+    if not is_fragmented(path):
+        return False
+    size = path.stat().st_size
+    if shutil.disk_usage(path.parent).free < size * 1.05:
+        log(f"not enough free disk to make {path.name} seekable ({size / 1e9:.1f} GB needed) - "
+            "renders and previews of this VOD stay slow")
+        return False
+    tmp = path.with_name(path.stem + ".remux.mp4")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-nostdin", "-i", str(path),
+             "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-f", "mp4", str(tmp)],
+            check=True,
+        )
+        os.replace(tmp, path)
+    except (subprocess.CalledProcessError, OSError) as e:
+        tmp.unlink(missing_ok=True)
+        log(f"could not make {path.name} seekable: {e}")
+        return False
+    return True
 
 
 def probe_duration(path: Path) -> float:

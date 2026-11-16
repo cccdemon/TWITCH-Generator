@@ -86,6 +86,12 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         info, work, fmt=dl.get("format", "best"), reuse=dl.get("reuse_existing", True)
     )
     log(f"media: {media}")
+    # Twitch delivers fragmented MP4; opening that costs a full read of the file on
+    # every ffmpeg call (extract, each render, each preview). Fix it once.
+    if clip_stage.is_fragmented(media):
+        t_fix = time.time()
+        if clip_stage.make_seekable(media, log):
+            log(f"made the download seekable in {_fmt_dur(time.time() - t_fix)}")
 
     # Predict total processing time + Claude cost from VOD length (learned).
     vod_seconds = info.duration or timing.probe_duration(media)
@@ -223,6 +229,23 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             f"render clips manually in the editor (/edit/{info.vod_id})"
         )
         _finish(work, t0, vod_seconds, meter)
+        return 0
+    if c.get("render", "auto") == "on_post":
+        # Deliver raw pieces only: the vertical render happens in the post panel, once
+        # cut and picture regions are chosen for that scene (one encode, nothing wasted).
+        margin = float(c.get("raw_margin", 20.0))
+        mx.render(0, len(moments))
+        for i, m in enumerate(moments, 1):
+            info_raw = clip_stage.cut_raw(
+                media, work / "clips" / "raw", clip_stage.clip_name(m),
+                max(0.0, m.start - c.get("pad_start", 1.0) - margin),
+                m.end + c.get("pad_end", 1.0) + margin,
+            )
+            mx.render(i, len(moments))
+            log(f"  raw piece {clip_stage.clip_name(m)} {info_raw['start']:.1f}-{info_raw['end']:.1f} s")
+        elapsed = _finish(work, t0, vod_seconds, meter)
+        log(f"[green]done - {len(moments)} raw pieces in {work / 'clips' / 'raw'}, "
+            f"render them from the clips page (took {_fmt_dur(elapsed)})")
         return 0
     facecam = c.get("facecam") or {}
     layout, game, top = c.get("layout", "split"), None, 0.5

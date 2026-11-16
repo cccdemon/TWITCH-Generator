@@ -78,6 +78,14 @@ def _clip_path(vod: str, clip: str) -> Path:
     return p
 
 
+def _require_clip(vod: str, clip: str) -> Path:
+    """Path of the rendered clip; 404 unless it or its raw piece exists."""
+    path = _clip_path(vod, clip)
+    if not posting.clip_exists(_vod_dir(vod), clip):
+        raise HTTPException(404, "no such clip")
+    return path
+
+
 def _moments(vod: str) -> dict[int, dict]:
     from .web import _moments_map
 
@@ -180,8 +188,7 @@ def _refresh(store: posting.PostStore, clip: str, only_active: bool = True,
 
 def _panel(vod: str, clip: str) -> dict:
     vdir = _vod_dir(vod)
-    if not _clip_path(vod, clip).is_file():
-        raise HTTPException(404, "no such clip")
+    path = _require_clip(vod, clip)
     cfg = load_config()
     moments = _moments(vod)
     store = posting.PostStore(vdir)
@@ -189,7 +196,7 @@ def _panel(vod: str, clip: str) -> dict:
     # AI tags are NOT fetched here: under Ollama that can take minutes (model swap,
     # running job). The page asks POST .../hashtags after rendering the panel.
     caption = entry["caption"] or _suggested_caption(clip, moments, entry["ai_tags"] or [])
-    sig = _file_sig(_clip_path(vod, clip))
+    sig = _file_sig(path) if path.is_file() else None   # None = raw piece, not rendered yet
     posts = [{**p, "stale": bool(p.get("file")) and p.get("file") != sig} for p in entry["posts"]]
     return {
         "window": posting.window(vdir, clip, moments, cfg),
@@ -291,18 +298,21 @@ _preview_locks: dict[str, threading.Lock] = {}
 
 @router.get("/api/post/{vod}/{clip}/preview")
 def post_preview(request: Request, vod: str, clip: str):
-    """Low-res cut of the whole timeline range (window min..max) from the source VOD, so
-    the preview can show material before/after the rendered clip. Cached per range."""
+    """The whole timeline range (window min..max) for the preview: the clip's raw piece
+    as it is, or a low-res cut from the source VOD (cached per range), so the preview
+    can show material before/after the rendered clip."""
     from fastapi.responses import FileResponse
     from . import clip as clip_stage
 
     _user(request)
     vdir = _vod_dir(vod)
-    if not _clip_path(vod, clip).is_file():
-        raise HTTPException(404, "no such clip")
+    _require_clip(vod, clip)
     w = posting.window(vdir, clip, _moments(vod), load_config())
     if w["mode"] != "source":
         raise HTTPException(404, "kein Quellvideo – Vorschau nur aus dem Clip")
+    if w["raw"]:
+        return FileResponse(posting.raw_path(vdir, clip), media_type="video/mp4",
+                            headers={"Cache-Control": "no-store"})
     stem = clip[:-4]
     out = vdir / "preview" / f"{stem}_{int(w['min'] * 10)}_{int(w['max'] * 10)}.mp4"
     with _clip_locks_guard:
@@ -343,8 +353,7 @@ def post_draft(request: Request, vod: str, clip: str, body: dict = Body(...)) ->
 
 def _trim_call(fn, vod: str, clip: str, *args, **kw):
     vdir = _vod_dir(vod)
-    if not _clip_path(vod, clip).is_file():
-        raise HTTPException(404, "no such clip")
+    _require_clip(vod, clip)
     from .web import _busy_vod_ids
 
     if vod in _busy_vod_ids():
@@ -396,6 +405,8 @@ def post_send(request: Request, vod: str, clip: str, body: dict = Body(...)) -> 
     if errors:
         raise HTTPException(400, "; ".join(errors))
     if not path.is_file():
+        if posting.raw_info(vdir, clip):
+            raise HTTPException(400, "Clip ist noch nicht gerendert – erst rendern")
         raise HTTPException(404, "Clip-Datei fehlt")
     if not poster_client.configured():
         raise HTTPException(400, "Handy-Dienst nicht eingerichtet (Settings)")

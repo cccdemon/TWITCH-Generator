@@ -4,6 +4,11 @@ Pure logic, no web or ffmpeg imports at module level, so it is testable on its o
 The phone itself is driven by the separate clip-poster service (poster/), reached
 through src/poster_client.py; the routes live in src/posting_web.py.
 
+A pipeline clip is either rendered right away (clips/<name>.mp4) or, with
+`clip.render: on_post`, delivered as a raw piece of the VOD (clips/raw/<name>.mp4 +
+.json with its VOD seconds) that is rendered from the post panel once cut and
+picture regions are chosen.
+
 posts.json = {clip_name: {"trim": {"mode", "start", "end"} | None,
                           "caption": str | None, "ai_tags": [str] | None,
                           "posts": [{"id", "platforms", "dry_run", "run_at", "created", "status", ...}]}}
@@ -227,6 +232,31 @@ def _source(vod_dir: Path) -> Path:
     return vod_dir / f"{vod_dir.name}.mp4"
 
 
+def raw_path(vod_dir: Path, clip: str) -> Path:
+    return Path(vod_dir) / "clips" / "raw" / clip
+
+
+def raw_info(vod_dir: Path, clip: str) -> dict | None:
+    """{"start", "end"} in VOD seconds of the clip's raw piece (render-at-post mode), or None."""
+    p = raw_path(vod_dir, clip)
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+        start, end = float(d["start"]), float(d["end"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    return {"start": start, "end": end} if end > start else None
+
+
+def is_rendered(vod_dir: Path, clip: str) -> bool:
+    return (Path(vod_dir) / "clips" / clip).is_file()
+
+
+def clip_exists(vod_dir: Path, clip: str) -> bool:
+    return is_rendered(vod_dir, clip) or raw_info(vod_dir, clip) is not None
+
+
 def _orig_window(moment: dict, cfg: dict) -> tuple[float, float]:
     c = cfg.get("clip") or {}
     start = max(0.0, float(moment["start"]) - float(c.get("pad_start", 1.0)))
@@ -240,35 +270,45 @@ def _moment(clip: str, moments: dict[int, dict]) -> dict:
 def window(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict) -> dict:
     """Current cut + draggable range for the timeline.
 
-    mode "source": absolute VOD seconds, re-cut from the source video (pipeline
-    clip and source still on disk). mode "clip": seconds within the clip file,
-    shorten only.
+    mode "source": absolute VOD seconds, rendered from the clip's raw piece (the
+    range is the piece) or, without one, from the source video (pipeline clip and
+    source still on disk). mode "clip": seconds within the clip file, shorten only.
+    `rendered` says whether the vertical clip file exists yet.
     """
     from . import clip as clip_stage
 
     vod_dir = Path(vod_dir)
     kind = clip_kind(clip, moments)
-    if kind == "pipeline" and _source(vod_dir).exists():
+    raw = raw_info(vod_dir, clip) if kind == "pipeline" else None
+    has_source = _source(vod_dir).exists()
+    if kind == "pipeline" and (raw or has_source):
         o_start, o_end = _orig_window(_moment(clip, moments), cfg)
-        trim = PostStore(vod_dir).get(clip)["trim"]
+        entry = PostStore(vod_dir).get(clip)
+        trim = entry["trim"]
         if trim and trim.get("mode") == "source":
             start, end = float(trim["start"]), float(trim["end"])
         else:
             start, end = o_start, o_end
-        lo = max(0.0, start - MARGIN_S)
-        hi = end + MARGIN_S
-        dur = _vod_duration(vod_dir)
-        if not dur:  # info.json from twitch.py carries no duration
-            dur = _probed_duration(_source(vod_dir))
-        if dur:
-            hi = min(hi, dur)
-        return {"kind": kind, "mode": "source", "source": True, "start": start, "end": end,
+        if raw:
+            lo, hi = raw["start"], raw["end"]
+            o_start, o_end = max(lo, o_start), min(hi, o_end)
+            start, end = max(lo, start), min(hi, end)
+        else:
+            lo = max(0.0, start - MARGIN_S)
+            hi = end + MARGIN_S
+            dur = _vod_duration(vod_dir)
+            if not dur:  # info.json from twitch.py carries no duration
+                dur = _probed_duration(_source(vod_dir))
+            if dur:
+                hi = min(hi, dur)
+        return {"kind": kind, "mode": "source", "source": has_source, "raw": bool(raw),
+                "rendered": is_rendered(vod_dir, clip), "start": start, "end": end,
                 "min": lo, "max": hi, "orig_start": o_start, "orig_end": o_end,
-                "crop": PostStore(vod_dir).get(clip).get("crop")}
+                "crop": entry.get("crop")}
     length = clip_stage.probe_duration(vod_dir / "clips" / clip)
-    return {"kind": kind, "mode": "clip", "source": _source(vod_dir).exists(), "start": 0.0,
-            "end": length, "min": 0.0, "max": length, "orig_start": 0.0, "orig_end": length,
-            "crop": None}
+    return {"kind": kind, "mode": "clip", "source": has_source, "raw": False, "rendered": True,
+            "start": 0.0, "end": length, "min": 0.0, "max": length, "orig_start": 0.0,
+            "orig_end": length, "crop": None}
 
 
 LAYOUTS = ("split", "crop")  # split: facecam top / game bottom; crop: game fills 9:16
@@ -312,9 +352,14 @@ def _render_source(vod_dir: Path, clip: str, start: float, end: float, moments, 
     # re-cut or reset looks like the pipeline's own render
     crop = crop or regions.resolve(vod_dir, c.get("layout", "split"))
     layout = crop["layout"] if crop else c.get("layout", "split")
+    # the raw piece is a stream copy of the VOD, so rendering from it loses nothing
+    # and still works after the VOD itself was freed
+    raw = raw_info(vod_dir, clip)
+    use_raw = bool(raw) and raw["start"] - 0.01 <= start and end <= raw["end"] + 0.01
     clip_stage.render_custom(
-        _source(vod_dir), vod_dir / "clips" / clip,
+        raw_path(vod_dir, clip) if use_raw else _source(vod_dir), vod_dir / "clips" / clip,
         start=start, duration=end - start,
+        seek=(start - raw["start"]) if use_raw else None,
         width=c.get("width", 1080), height=c.get("height", 1920),
         layout=layout, facecam=(crop.get("cam") if crop else facecam),
         game=(crop["game"] if crop else None),
@@ -364,7 +409,11 @@ def reset_trim(vod_dir: Path, clip: str, moments: dict[int, dict], cfg: dict,
     if is_locked(store.get(clip)):
         raise LockedError("erst Post abbrechen")
     backup = vod_dir / "clips" / ".orig" / clip
-    if clip_kind(clip, moments) == "pipeline" and _source(vod_dir).exists():
+    if clip_kind(clip, moments) == "pipeline" and raw_info(vod_dir, clip):
+        # render-at-post: back to the untouched raw piece, nothing rendered
+        (vod_dir / "clips" / clip).unlink(missing_ok=True)
+        (vod_dir / "clips" / clip).with_suffix(".srt").unlink(missing_ok=True)
+    elif clip_kind(clip, moments) == "pipeline" and _source(vod_dir).exists():
         o_start, o_end = _orig_window(_moment(clip, moments), cfg)
         _render_source(vod_dir, clip, o_start, o_end, moments, cfg, facecam, segments)
         backup.unlink(missing_ok=True)

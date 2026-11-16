@@ -77,6 +77,19 @@ Im Job-Log (Web-UI oder `dc logs app`) stehen pro Lauf:
 - `whisper: backend=whispercpp-server …` und `whisper: chunk k/n` — 30-min-Chunk sollte in 1–3 min durch sein (Faktor ≫ 10×).
 - `llm: prompt ≈N tokens vs num_ctx …` — Warnung, wenn ein Prompt nahe am Kontextfenster liegt (Ollama schneidet still ab). Dann `llm.ollama.num_ctx.text` erhöhen oder `analyze.max_clips`/`score.candidate_factor` senken.
 
+### Rendern erst beim Posten
+
+`clip.render: on_post` in `config.yaml` (auf der ClipBox an): Die Pipeline rendert
+keine Hochkant-Clips mehr, sie schneidet pro Moment nur ein Rohstück aus dem VOD
+(Querformat, ohne Neukodieren, ±20 s Rand, `clip.raw_margin`). Auf der Clips-Seite
+steht dann „Rohstück · noch nicht gerendert". Im Panel „Posten" (ohne Handy-Dienst:
+„Schneiden") Schnitt und Bildbereiche für genau diese Szene wählen, „Fertigen Clip
+rendern", danach senden oder herunterladen. „Zurücksetzen" verwirft den Render.
+
+Die Rohstücke bleiben bei „Free MB" erhalten. Schnitt und Bildbereiche lassen sich
+also auch dann noch ändern, wenn das große VOD schon gelöscht ist. `render: auto`
+stellt das alte Verhalten wieder her.
+
 ### Portal mit eigenem Namen und Zertifikat (optional)
 
 Ein Hostname im Heimnetz mit echtem Zertifikat vor allen Oberflächen der Box:

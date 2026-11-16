@@ -86,8 +86,7 @@ def _vod_groups() -> list[dict]:
     for vod_dir in sorted(data_dir().iterdir(), key=lambda p: p.name, reverse=True):
         if not vod_dir.is_dir():
             continue
-        clips_dir = vod_dir / "clips"
-        n = sum(1 for _ in clips_dir.glob("*.mp4")) if clips_dir.is_dir() else 0
+        n = len(_clip_names(vod_dir))
         has_moments = (vod_dir / "moments.json").exists()
         if n or has_moments:
             cost = pricing.load_cost(vod_dir / "cost.json")
@@ -197,19 +196,35 @@ def _moments_map(vod_id: str) -> dict[int, dict]:
     return out
 
 
+def _clip_names(vod_dir: Path) -> list[str]:
+    """Rendered clips plus raw pieces that are not rendered yet (render-at-post)."""
+    clips_dir = vod_dir / "clips"
+    names = {f.name for f in clips_dir.glob("*.mp4")} if clips_dir.is_dir() else set()
+    raw_dir = clips_dir / "raw"
+    if raw_dir.is_dir():
+        names |= {f.name for f in raw_dir.glob("*.mp4") if f.with_suffix(".json").is_file()}
+    return sorted(names)
+
+
 def _clips_detail(vod_id: str) -> list[dict]:
     """Clips of one VOD joined with their moment metadata."""
-    clips_dir = data_dir() / vod_id / "clips"
-    if not clips_dir.is_dir():
-        return []
+    vdir = data_dir() / vod_id
+    clips_dir = vdir / "clips"
     mm = _moments_map(vod_id)
     res: list[dict] = []
-    for f in sorted(clips_dir.glob("*.mp4")):
-        lead = f.name.split("_", 1)[0]
+    for name in _clip_names(vdir):
+        f = clips_dir / name
+        rendered = f.is_file()
+        raw = (clips_dir / "raw" / name).is_file()
+        if not rendered:
+            f = clips_dir / "raw" / name
+        lead = name.split("_", 1)[0]
         m = mm.get(int(lead)) if lead.isdigit() else None
         m = m or {}
         res.append({
-            "name": f.name,
+            "name": name,
+            "rendered": rendered,
+            "raw": raw,
             "size_mb": round(f.stat().st_size / 1e6, 1),
             "title": m.get("title") or f.name,
             "category": m.get("category", ""),
@@ -923,13 +938,22 @@ def delete_vod(vod_id: str, _: str = Depends(current_user)) -> RedirectResponse:
 
 
 @app.get("/clips/{vod_id}/{filename}")
-def clip_file(vod_id: str, filename: str, _: str = Depends(current_user)) -> FileResponse:
-    """Serve a clip inline (Range-capable) so it previews and downloads."""
+def clip_file(vod_id: str, filename: str, raw: int = 0,
+              _: str = Depends(current_user)) -> FileResponse:
+    """Serve a clip inline (Range-capable) so it previews and downloads.
+
+    A clip that is not rendered yet answers with its raw piece; `?raw=1` asks for
+    the raw piece even when a rendered version exists."""
     if not (_SAFE_NAME.match(vod_id) and _SAFE_NAME.match(filename) and filename.endswith(".mp4")):
         raise HTTPException(400, "bad name")
     clips_root = (data_dir() / vod_id / "clips").resolve()
     path = (clips_root / filename).resolve()
-    if not str(path).startswith(str(clips_root) + os.sep) or not path.is_file():
+    if not str(path).startswith(str(clips_root) + os.sep):
+        raise HTTPException(404, "no such clip")
+    raw_piece = clips_root / "raw" / filename
+    if (raw or not path.is_file()) and raw_piece.is_file():
+        path = raw_piece
+    if not path.is_file():
         raise HTTPException(404, "no such clip")
     return FileResponse(path, media_type="video/mp4")
 
