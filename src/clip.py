@@ -69,22 +69,71 @@ def slug(title: str, limit: int = 40) -> str:
 
 
 
-def _split_filtergraph(width: int, height: int, facecam: dict) -> str:
-    """filter_complex: top half = facecam region, bottom half = center-cropped game."""
-    h2 = height // 2
-    fx = float(facecam.get("x", 0.78))
-    fy = float(facecam.get("y", 0.0))
-    fw = float(facecam.get("w", 0.22))
-    fh = float(facecam.get("h", 0.22))
-    fill = (
-        f"scale={width}:{h2}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{h2}"
+TOP_MIN, TOP_MAX = 0.15, 0.75   # share of the output height the facecam cell may take
+
+
+def clamp_top(top) -> float:
+    try:
+        return max(TOP_MIN, min(TOP_MAX, float(top)))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _venc() -> list[str]:
+    """x264 settings from config.yaml `clip.preset` / `clip.crf` (defaults: veryfast / 20).
+
+    The uploaded file is re-encoded by every platform, so a slower preset and a lower
+    CRF pay off where the CPU allows it (deploy/local uses slow / 17).
+    """
+    preset, crf = "veryfast", 20
+    try:
+        from .config import load_config
+        c = load_config().get("clip") or {}
+        preset, crf = str(c.get("preset", preset)), int(c.get("crf", crf))
+    except Exception:  # noqa: BLE001 - no config file (tests, ad-hoc use): defaults
+        pass
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+
+
+def _fill(width: int, height: int, sharpen: bool = False) -> str:
+    """ffmpeg chain: scale (lanczos) to cover width x height, crop the overflow.
+
+    `sharpen` adds a mild unsharp mask; used for the facecam, which is a small
+    region of the source blown up several times.
+    """
+    chain = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={width}:{height}"
     )
+    return chain + ",unsharp=5:5:0.6:5:5:0.0" if sharpen else chain
+
+
+def _box_fill(box: dict | None, width: int, height: int, sharpen: bool = False) -> str:
+    """ffmpeg chain: crop a fractional region, then fill width x height."""
+    b = box or {}
+    bx = max(0.0, min(1.0, float(b.get("x", 0.0))))
+    by = max(0.0, min(1.0, float(b.get("y", 0.0))))
+    bw = max(0.02, min(1.0 - bx, float(b.get("w", 1.0))))
+    bh = max(0.02, min(1.0 - by, float(b.get("h", 1.0))))
+    return f"crop=iw*{bw}:ih*{bh}:iw*{bx}:ih*{by}," + _fill(width, height, sharpen)
+
+
+def _stack_graph(width: int, height: int, cam: dict | None, game: dict | None,
+                 top: float = 0.5) -> str:
+    """filter_complex ending in [stacked]: facecam cell on top, game cell below.
+
+    `top` is the facecam cell's share of the output height (0.5 = two halves). Both
+    boxes are fractions of the source frame; `game=None` = centre crop of the frame.
+    """
+    h_top = int(round(height * clamp_top(top) / 2)) * 2
     return (
-        f"[0:v]crop=iw*{fw}:ih*{fh}:iw*{fx}:ih*{fy},{fill}[top];"
-        f"[0:v]{fill}[bot];"
+        f"[0:v]{_box_fill(cam, width, h_top, sharpen=True)}[top];"
+        f"[0:v]{_box_fill(game, width, height - h_top)}[bot];"
         f"[top][bot]vstack=inputs=2[stacked]"
     )
+
+
+_CAM_DEFAULT = {"x": 0.78, "y": 0.0, "w": 0.22, "h": 0.22}
 
 
 def render_clip(
@@ -98,6 +147,8 @@ def render_clip(
     height: int,
     layout: str = "split",
     facecam: dict | None = None,
+    game: dict | None = None,
+    top: float = 0.5,
     pad_start: float,
     pad_end: float,
     burn_subtitles: bool,
@@ -131,7 +182,7 @@ def render_clip(
     ]
 
     if use_split:
-        graph = _split_filtergraph(width, height, facecam or {})
+        graph = _stack_graph(width, height, {**_CAM_DEFAULT, **(facecam or {})}, game, top)
         if has_subs:
             graph += f";[stacked]{_subtitles_filter(srt_path)}[vout]"
             vlabel = "[vout]"
@@ -140,11 +191,8 @@ def render_clip(
         cmd += ["-filter_complex", graph, "-map", vlabel, "-map", "0:a?"]
     else:
         filters: list[str] = []
-        if vertical:  # layout == "crop": plain center-crop into 9:16
-            filters.append(
-                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-                f"crop={width}:{height}"
-            )
+        if vertical:  # layout == "crop": the game region (or the frame centre) fills 9:16
+            filters.append(_box_fill(game, width, height))
         if has_subs:
             filters.append(_subtitles_filter(srt_path))
         if filters:
@@ -154,7 +202,7 @@ def render_clip(
     # "*.mp4", so a half-written clip is never picked up mid-render.
     tmp_path = out_dir / f"{name}.mp4.part"
     cmd += [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *_venc(),
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         "-f", "mp4",
@@ -165,20 +213,6 @@ def render_clip(
 
     return Clip(moment=moment, path=str(out_path),
                 srt_path=str(srt_path) if has_subs else None)
-
-
-def _box_fill(box: dict | None, width: int, height: int) -> str:
-    """ffmpeg chain: crop a fractional region, then fill width x height."""
-    b = box or {}
-    bx = max(0.0, min(1.0, float(b.get("x", 0.0))))
-    by = max(0.0, min(1.0, float(b.get("y", 0.0))))
-    bw = max(0.02, min(1.0 - bx, float(b.get("w", 1.0))))
-    bh = max(0.02, min(1.0 - by, float(b.get("h", 1.0))))
-    return (
-        f"crop=iw*{bw}:ih*{bh}:iw*{bx}:ih*{by},"
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height}"
-    )
 
 
 def render_custom(
@@ -192,13 +226,15 @@ def render_custom(
     layout: str = "split",
     facecam: dict | None = None,
     game: dict | None = None,
+    top: float = 0.5,
     segments: list[TranscriptSegment] | None = None,
     burn_subtitles: bool = False,
     title: str = "",
 ) -> Path:
     """Render one clip from an explicit trim window + crop regions (GUI editor).
 
-    layout "split": top half = `facecam` region, bottom half = `game` region.
+    layout "split": `facecam` region on top (`top` = its share of the height,
+                    0.5 = halves), `game` region below.
     layout "crop":  the whole 9:16 frame is the `game` region (or center crop).
     Boxes are fractions {x,y,w,h} of the source frame; None = full frame.
     """
@@ -216,12 +252,7 @@ def render_custom(
     cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(source), "-t", f"{duration:.2f}"]
 
     if layout == "split":
-        h2 = height // 2
-        graph = (
-            f"[0:v]{_box_fill(facecam, width, h2)}[top];"
-            f"[0:v]{_box_fill(game, width, h2)}[bot];"
-            f"[top][bot]vstack=inputs=2[stacked]"
-        )
+        graph = _stack_graph(width, height, facecam, game, top)
         vlabel = "[stacked]"
         if has_subs:
             graph += f";[stacked]{_subtitles_filter(srt_path)}[vout]"
@@ -235,7 +266,7 @@ def render_custom(
 
     tmp = out_path.with_suffix(".mp4.part")
     cmd += [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *_venc(),
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", "-f", "mp4", str(tmp),
     ]
@@ -267,7 +298,7 @@ def trim_clip(src: Path, out: Path, start: float, end: float) -> Path:
     cmd = [
         "ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{duration:.2f}",
         "-map", "0:v", "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *_venc(),
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", "-f", "mp4", str(tmp),
     ]

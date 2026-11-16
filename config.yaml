@@ -124,10 +124,17 @@ clip:
   width: 1080
   height: 1920
   # Vertical composition:
-  #   "split"  — top half = streamer facecam, bottom half = game content (center-crop).
+  #   "split"  — streamer facecam on top, game content below (center-crop).
   #   "crop"   — plain center-crop of the source into 9:16 (old behaviour).
-  # Only used when vertical: true.
+  # Only used when vertical: true. The "Bildbereiche" page of a VOD (facecam box,
+  # content box, how the height is split) overrides layout and both boxes, for
+  # that VOD or as the default for all new ones.
   layout: split
+  # x264 quality for every render. Platforms re-encode the upload, so a slower
+  # preset and lower CRF give a better result where the CPU allows it; these
+  # defaults keep renders fast on a small server (deploy/local uses slow / 17).
+  preset: veryfast
+  crf: 20
   # Auto-detect the facecam box with Claude Vision (one cheap call per VOD,
   # cached to data/<vod>/facecam.json). Manual picks in the web UI override it.
   # Falls back to the facecam box below when detection finds nothing.

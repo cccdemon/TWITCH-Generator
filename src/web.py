@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse,
 )
@@ -863,54 +863,49 @@ def frame_image(vod_id: str, _: str = Depends(current_user)) -> FileResponse:
 
 @app.get("/facecam/{vod_id}", response_class=HTMLResponse)
 def facecam_picker(request: Request, vod_id: str, _: str = Depends(current_user)) -> HTMLResponse:
+    """Picture regions for the vertical clip: facecam box, content box, layout."""
+    from . import regions
+
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
-    box = None
-    p = data_dir() / vod_id / "facecam.json"
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if data:
-                box = data
-        except (json.JSONDecodeError, OSError):
-            pass
+    vdir = data_dir() / vod_id
+    layout = (load_config().get("clip") or {}).get("layout", "split")
+    layout = layout if layout in ("split", "crop") else "split"
+    own = regions.load_vod(vdir, layout)
+    default = regions.load_default(data_dir(), layout)
+    spec = own or default
+    if not spec:  # nothing picked yet: start from the auto-detected facecam, if any
+        auto = _load_facecam(vod_id) or {}
+        cam = ({k: float(auto[k]) for k in ("x", "y", "w", "h")}
+               if all(k in auto for k in ("x", "y", "w", "h")) else None)
+        spec = {"layout": layout, "cam": cam, "game": None, "top": 0.5}
     return _TEMPLATES.TemplateResponse(
         request, "facecam.html",
-        {"base": BASE, "vod": vod_id, "label": _vod_label(vod_id), "box": box},
+        {"base": BASE, "vod": vod_id, "label": _vod_label(vod_id), "spec": spec,
+         "source": "vod" if own else "default" if default else "auto"},
     )
 
 
 @app.post("/facecam/{vod_id}")
-def facecam_save(
-    vod_id: str,
-    x: float = Form(...), y: float = Form(...),
-    w: float = Form(...), h: float = Form(...),
-    _: str = Depends(current_user),
-) -> RedirectResponse:
-    """Save a manually-picked facecam box (overrides auto-detect on next render)."""
+def facecam_save(vod_id: str, body: dict = Body(...), _: str = Depends(current_user)) -> JSONResponse:
+    """Save the picked regions for this VOD (optionally as the default for new VODs).
+
+    They override auto-detection on the next pipeline render and are the starting
+    boxes in the post panel."""
+    from . import regions
+
     if not _SAFE_NAME.match(vod_id):
         raise HTTPException(404, "no such vod")
-
-    def _clamp01(v: float, lo: float = 0.0) -> float:
-        return max(lo, min(1.0, v))
-
-    bx, by = _clamp01(x), _clamp01(y)
-    bw, bh = _clamp01(w, 0.02), _clamp01(h, 0.02)
-    bw = min(bw, 1.0 - bx)
-    bh = min(bh, 1.0 - by)
-    box = {"x": round(bx, 4), "y": round(by, 4),
-           "w": round(bw, 4), "h": round(bh, 4), "manual": True}
     vdir = data_dir() / vod_id
     if not vdir.is_dir():
         raise HTTPException(404, "no such vod")
     try:
-        (vdir / "facecam.json").write_text(json.dumps(box), encoding="utf-8")
+        spec = regions.save(vdir, body.get("spec") or {}, as_default=bool(body.get("as_default")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     except OSError:
         raise HTTPException(500, "could not save")
-    return RedirectResponse(
-        f"{BASE}/clips/{vod_id}?msg=" + quote("Facecam box saved — retry the job to re-render"),
-        status_code=303,
-    )
+    return JSONResponse({"ok": True, "spec": spec})
 
 
 @app.post("/vods/{vod_id}/free")

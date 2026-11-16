@@ -285,12 +285,19 @@ def _box(b) -> dict:
 
 
 def validate_crop(crop: dict) -> dict:
-    """{"layout": "split"|"crop", "cam": box (split only), "game": box}, boxes as frame fractions."""
+    """{"layout": "split"|"crop", "cam": box + "top": cell share (split only), "game": box}.
+
+    Boxes are frame fractions; see regions.py for the shared spec."""
     if not isinstance(crop, dict) or crop.get("layout") not in LAYOUTS:
         raise ValueError("Bildausschnitt: Layout muss split oder crop sein")
     out = {"layout": crop["layout"], "game": _box(crop.get("game"))}
     if out["layout"] == "split":
         out["cam"] = _box(crop.get("cam"))
+        # share of the output height for the facecam cell; older crops have none = halves
+        try:
+            out["top"] = round(max(0.15, min(0.75, float(crop.get("top", 0.5)))), 4)
+        except (TypeError, ValueError):
+            raise ValueError("Bildausschnitt: Aufteilung ungültig")
     return out
 
 
@@ -298,7 +305,12 @@ def _render_source(vod_dir: Path, clip: str, start: float, end: float, moments, 
                    facecam, segments, crop: dict | None = None) -> None:
     from . import clip as clip_stage
 
+    from . import regions
+
     c = cfg.get("clip") or {}
+    # no per-clip crop: the regions picked for the VOD (or the saved default), so a
+    # re-cut or reset looks like the pipeline's own render
+    crop = crop or regions.resolve(vod_dir, c.get("layout", "split"))
     layout = crop["layout"] if crop else c.get("layout", "split")
     clip_stage.render_custom(
         _source(vod_dir), vod_dir / "clips" / clip,
@@ -306,6 +318,7 @@ def _render_source(vod_dir: Path, clip: str, start: float, end: float, moments, 
         width=c.get("width", 1080), height=c.get("height", 1920),
         layout=layout, facecam=(crop.get("cam") if crop else facecam),
         game=(crop["game"] if crop else None),
+        top=(crop.get("top", 0.5) if crop else 0.5),
         segments=segments, burn_subtitles=bool(c.get("burn_subtitles", False)),
         title=_moment(clip, moments).get("title", ""),
     )

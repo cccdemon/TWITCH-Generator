@@ -119,6 +119,9 @@ clip:
   width: 1080
   height: 1920
   layout: split
+  # the box has CPU to spare: a clean master for the platforms' own re-encode
+  preset: slow
+  crf: 17
   facecam_auto: true
   facecam:
     x: 0.0

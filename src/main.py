@@ -19,6 +19,7 @@ from . import llm
 from . import metrics
 from . import pricing
 from . import refine as refine_stage
+from . import regions
 from . import score as score_stage
 from . import timing
 from . import transcribe as transcribe_stage
@@ -224,7 +225,13 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         _finish(work, t0, vod_seconds, meter)
         return 0
     facecam = c.get("facecam") or {}
-    if c.get("vertical", True) and c.get("layout", "split") == "split" and c.get("facecam_auto", True):
+    layout, game, top = c.get("layout", "split"), None, 0.5
+    # regions picked in the UI for this VOD, or the saved default, beat auto-detection
+    picked = regions.resolve(work, layout) if c.get("vertical", True) else None
+    if picked:
+        layout, facecam, game, top = picked["layout"], picked["cam"], picked["game"], picked["top"]
+        log(f"[cyan]picture regions from the UI[/] layout={layout} cam={facecam} game={game} top={top}")
+    elif c.get("vertical", True) and layout == "split" and c.get("facecam_auto", True):
         det = vision_stage.detect_facecam(
             work, model=vcfg.get("model", "claude-sonnet-4-6"), meter=meter, cfg=cfg
         )
@@ -241,8 +248,10 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
             vertical=c.get("vertical", True),
             width=c.get("width", 1080),
             height=c.get("height", 1920),
-            layout=c.get("layout", "split"),
+            layout=layout,
             facecam=facecam,
+            game=game,
+            top=top,
             pad_start=c.get("pad_start", 1.0),
             pad_end=c.get("pad_end", 1.0),
             burn_subtitles=c.get("burn_subtitles", True),

@@ -146,7 +146,7 @@ def test_apply_trim_with_crop_renders_and_stores_it(vod, rec):
                segments=None, crop=CROP)
     r = rec["render_custom"]
     assert r["layout"] == "split" and r["facecam"] == CROP["cam"] and r["game"] == CROP["game"]
-    assert PostStore(vod).get(CLIP)["crop"] == CROP
+    assert PostStore(vod).get(CLIP)["crop"] == {**CROP, "top": 0.5}   # no top given = halves
 
 
 def test_stored_crop_used_on_next_trim(vod, rec):
@@ -177,6 +177,6 @@ def test_crop_needs_source(vod_no_src, rec):
 
 def test_window_reports_crop_and_reset_clears_it(vod, rec):
     apply_trim(vod, CLIP, 95, 125, MOMENTS, CFG, None, None, crop=CROP)
-    assert window(vod, CLIP, MOMENTS, CFG)["crop"] == CROP
+    assert window(vod, CLIP, MOMENTS, CFG)["crop"] == {**CROP, "top": 0.5}
     reset_trim(vod, CLIP, MOMENTS, CFG, None, None)
     assert window(vod, CLIP, MOMENTS, CFG)["crop"] is None

@@ -205,14 +205,24 @@ def _panel(vod: str, clip: str) -> dict:
 
 
 def _crop_default(vod: str) -> dict:
-    """Starting boxes for the crop editor: facecam as detected/picked, game centred at
-    the output aspect (split: 1080x960 = 9:8 per half; crop: 9:16), for a 16:9 source."""
+    """Starting boxes for the crop editor: the regions picked for the VOD (or the saved
+    default), else facecam as detected and the game centred. The editor re-fits the
+    game box to the cell left under the facecam; the numbers here assume 16:9."""
+    from . import regions
+
     layout = (load_config().get("clip") or {}).get("layout", "split")
     layout = layout if layout in posting.LAYOUTS else "split"
-    cam = _facecam(vod) or {"x": 0.0, "y": 0.0, "w": 0.22, "h": 0.22}
-    w = (9 / 8 if layout == "split" else 9 / 16) * 9 / 16
+    spec = regions.resolve(_vod_dir(vod), layout)
+    if spec:
+        layout, cam, top = spec["layout"], spec["cam"], spec["top"]
+    else:
+        cam, top = _facecam(vod) or {"x": 0.0, "y": 0.0, "w": 0.22, "h": 0.22}, 0.5
+    game = spec["game"] if spec and spec["game"] else None
+    if not game:
+        w = min(1.0, (9 / (16 * (1 - top)) if layout == "split" else 9 / 16) * 9 / 16)
+        game = {"x": round((1 - w) / 2, 4), "y": 0.0, "w": round(w, 4), "h": 1.0}
     return {"layout": layout, "cam": {k: float(cam[k]) for k in ("x", "y", "w", "h")},
-            "game": {"x": round((1 - w) / 2, 4), "y": 0.0, "w": round(w, 4), "h": 1.0}}
+            "game": game, "top": top}
 
 
 def _poster_call(fn, *a, **k):

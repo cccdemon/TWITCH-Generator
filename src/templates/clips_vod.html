@@ -87,7 +87,7 @@
   <span style="flex:1"></span>
   <span id="phone" class="badge" title="Handy-Dienst (clip-poster)">📱 …</span>
   <a href="{{ base }}/edit/{{ vod }}"><button type="button">✂ Editor</button></a>
-  <a href="{{ base }}/facecam/{{ vod }}"><button type="button">Facecam</button></a>
+  <a href="{{ base }}/facecam/{{ vod }}"><button type="button" title="Facecam- und Content-Rahmen für dieses VOD festlegen">Bildbereiche</button></a>
   {% if src_mb %}
   <form method="post" action="{{ base }}/vods/{{ vod }}/free" onsubmit="return confirm('Delete the {{ src_mb }} MB source video + intermediates? Clips are kept.{% if unposted %} Danach können Clips nur noch gekürzt, nicht mehr verlängert werden.{% endif %}')">
     <button type="submit">Free {{ src_mb }} MB</button></form>
@@ -397,17 +397,30 @@ function setPreviewSrc(S) {
   probe.src = BASE + want;
 }
 // ---------------------------------------------------------------- crop editor
-// Boxes are fractions of the source frame. Aspect is locked to what the box fills in
-// the 1080x1920 output: split = two 1080x960 halves (9:8), "nur Spiel" = 9:16.
-const OUT_ASPECT = {split: 9 / 8, crop: 9 / 16};
+// Boxes are fractions of the source frame. The facecam box is free: its shape sets
+// `top`, the share of the 1080x1920 output height its cell gets. The game box is
+// locked to the aspect of what is left below it ("nur Spiel" = the whole 9:16).
+const OUT_W = 1080, OUT_H = 1920, TOP_MIN = 0.15, TOP_MAX = 0.75;
+function topFor(S, cam) { return Math.max(TOP_MIN, Math.min(TOP_MAX, (OUT_W / OUT_H) * cam.h / (cam.w * srcAspect(S)))); }
+function gameAspect(c) { return c.layout === "split" ? OUT_W / (OUT_H * (1 - c.top)) : OUT_W / OUT_H; }
+function freeBox(b) {                   // any shape, kept inside the frame
+  const w = Math.min(1, Math.max(0.04, b.w)), h = Math.min(1, Math.max(0.04, b.h));
+  return {x: Math.min(1 - w, Math.max(0, b.x)), y: Math.min(1 - h, Math.max(0, b.y)), w, h};
+}
+// the same fitting the editor applies, so an untouched crop compares equal to itself
+function fitCrop(S, r) {
+  const c = {layout: r.layout, top: r.top || 0.5};
+  if (c.layout === "split") { c.cam = freeBox(r.cam || S.cropDefault.cam); c.top = topFor(S, c.cam); }
+  c.game = fitBox(S, r.game, gameAspect(c));
+  return c;
+}
 const cropKey = c => JSON.stringify(c, (k, v) => typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
 function cropBaseline(S) { return S.w.crop || S.cropDefault; }
 function cropDirty(S) {
   if (S.w.mode !== "source" || !S.crop) return false;
-  // compare against the baseline after the same aspect fitting the editor applies,
+  // compare against the baseline after the same fitting the editor applies,
   // otherwise an untouched clip would count as changed and block sending
-  const r = cropBaseline(S), b0 = {layout: r.layout, game: fitBox(S, r.game, OUT_ASPECT[r.layout])};
-  if (r.layout === "split") b0.cam = fitBox(S, r.cam || S.cropDefault.cam, OUT_ASPECT.split);
+  const b0 = fitCrop(S, cropBaseline(S));
   const a = {layout: S.crop.layout, game: S.crop.game}, b = {layout: b0.layout, game: b0.game};
   if (S.crop.layout === "split") { a.cam = S.crop.cam; b.cam = b0.cam; }
   return cropKey(a) !== cropKey(b);
@@ -435,9 +448,7 @@ function showCrop(S, on) {
   if (on && src) { layoutCrop(S); drawCrop(S); }
 }
 function layoutCrop(S) {
-  const c = S.crop;
-  c.game = fitBox(S, c.game, OUT_ASPECT[c.layout]);
-  if (c.layout === "split") c.cam = fitBox(S, c.cam || S.cropDefault.cam, OUT_ASPECT.split);
+  const c = S.crop = {...S.crop, ...fitCrop(S, S.crop)};
   S.p.querySelectorAll("[data-l]").forEach(b => b.classList.toggle("on", b.dataset.l === c.layout));
   S.q(".cbox.cam").style.display = c.layout === "split" ? "" : "none";
 }
@@ -455,8 +466,13 @@ function drawMini(S) {
   const cv = S.q(".mini");
   if (cv.style.display === "none" || !S.pv.videoWidth) return;
   const g = cv.getContext("2d"), W = S.pv.videoWidth, H = S.pv.videoHeight, c = S.crop;
-  const blit = (b, dy, dh) => { if (b) try { g.drawImage(S.pv, b.x * W, b.y * H, b.w * W, b.h * H, 0, dy, cv.width, dh); } catch (e) {} };
-  if (c.layout === "split") { blit(c.cam, 0, cv.height / 2); blit(c.game, cv.height / 2, cv.height / 2); }
+  // cover-fit a source box into its cell, like the renderer's scale + crop
+  const blit = (b, dy, dh) => { if (!b) return;
+    let sx = b.x * W, sy = b.y * H, sw = b.w * W, sh = b.h * H; const cell = cv.width / dh;
+    if (sw / sh > cell) { const nw = sh * cell; sx += (sw - nw) / 2; sw = nw; }
+    else { const nh = sw / cell; sy += (sh - nh) / 2; sh = nh; }
+    try { g.drawImage(S.pv, sx, sy, sw, sh, 0, dy, cv.width, dh); } catch (e) {} };
+  if (c.layout === "split") { const ht = Math.round(cv.height * (c.top || 0.5)); blit(c.cam, 0, ht); blit(c.game, ht, cv.height - ht); }
   else blit(c.game, 0, cv.height);
 }
 function initCrop(S) {
@@ -471,10 +487,10 @@ function initCrop(S) {
     el.addEventListener("pointermove", ev => {
       if (!mode) return;
       const cr = contentRect(S), dx = (ev.clientX - sx) / cr.width, dy = (ev.clientY - sy) / cr.height;
-      const outA = OUT_ASPECT[which === "cam" ? "split" : S.crop.layout];
-      S.crop[which] = fitBox(S, mode === "mv" ? {...start, x: start.x + dx, y: start.y + dy}
-                                               : {...start, w: start.w + dx}, outA);
-      drawCrop(S); update(S);
+      if (mode === "mv") S.crop[which] = {...start, x: start.x + dx, y: start.y + dy};
+      else if (which === "cam") S.crop.cam = {...start, w: Math.min(start.w + dx, 1 - start.x), h: Math.min(start.h + dy, 1 - start.y)};
+      else S.crop.game = {...start, w: start.w + dx};
+      layoutCrop(S); drawCrop(S); update(S);   // re-fit: the facecam's shape moves the split
     });
     const up = () => { mode = null; };
     el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
