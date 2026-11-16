@@ -28,9 +28,14 @@ def prepare(media: Path, work: Path, cfg: dict, *, log=print) -> None:
     frames_dir = work / "frames"
     interval = float(v.get("interval_seconds", 10))
     width = int(v.get("frame_width", 640))
-    # Frames feed vision AND the facecam auto-detect, which runs even with vision off.
-    needs_frames = bool(v.get("enabled", True)) or (
-        c.get("vertical", True) and c.get("layout", "split") == "split" and c.get("facecam_auto", True))
+    # Frames feed the vision grid AND the facecam auto-detect, which runs even with
+    # vision off. Neither is needed with vision.mode "candidates" (bursts are cut on
+    # demand) plus clip.render "on_post" (no automatic render, so no auto-detect);
+    # then the pass decodes audio only, which is several times faster.
+    grid_vision = bool(v.get("enabled", True)) and v.get("mode", "grid") == "grid"
+    needs_frames = grid_vision or (
+        c.get("vertical", True) and c.get("layout", "split") == "split"
+        and c.get("facecam_auto", True) and c.get("render", "auto") != "on_post")
     want_frames = needs_frames and not (work / "vision.json").exists() \
         and not vision_stage.frames_ready(frames_dir, interval, width)
     want_loud = bool(cfg.get("audio", {}).get("enabled", True)) \

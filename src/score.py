@@ -72,12 +72,23 @@ def _rank_calibrate(moments: list[Moment], floor: float = 0.3) -> dict[int, floa
     return {id(m): round(floor + (1.0 - floor) * i / n, 4) for i, m in enumerate(order)}
 
 
+def peak_time(m: Moment, chat: Signal, audio: Signal) -> float:
+    """Where to look inside a candidate window: the chat peak, else the audio burst,
+    else the middle."""
+    for sig in (chat, audio):
+        p = peak_in(sig, m.start, m.end)
+        if p and p[1] > 0:
+            return float(p[0])
+    return round((m.start + m.end) / 2, 2)
+
+
 def fuse(
     text_moments: list[Moment],
     vision_frames: list[VisionFrame],
     audio: Signal,
     chat: Signal,
     cfg: dict,
+    spawn_video: bool = True,
 ) -> list[Moment]:
     score_cfg = cfg.get("score", {})
     wC, wA, wT, wV = _norm_weights(score_cfg.get("weights", {}), {
@@ -108,7 +119,10 @@ def fuse(
     candidates: list[tuple[float, float, Moment | None, str]] = []
     for m in text_moments:
         candidates.append((m.start, m.end, m, "text"))
-    for cs, ce, _pt, _ps in clusters(_vision_signal(vision_frames), v_interval, v_thresh):
+    # spawn_video=False: the frames were taken AT existing candidates (vision.mode
+    # candidates), so they score windows but must not create duplicates of them
+    for cs, ce, _pt, _ps in (clusters(_vision_signal(vision_frames), v_interval, v_thresh)
+                             if spawn_video else []):
         s, e = _window_around(cs, ce, lead=lead, min_len=min_len, max_len=max_len)
         candidates.append((s, e, None, "video"))
     for cs, ce, _pt, _ps in clusters(chat, s_interval, c_thresh):

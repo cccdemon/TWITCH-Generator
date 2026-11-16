@@ -136,8 +136,12 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
         log(f"  audio: {len(sig)} buckets, {sum(1 for _, s in sig if s >= 0.5)} bursts")
         return sig
 
+    # vision.mode: "grid" scores a frame every interval_seconds (alongside Whisper);
+    # "candidates" looks only at the candidates found by speech/chat/audio, later on.
+    vmode = vcfg.get("mode", "grid")
+
     def _vision():
-        if not vcfg.get("enabled", True):
+        if not vcfg.get("enabled", True) or vmode != "grid":
             return []
         try:
             frames = vision_stage.run(media, work, cfg, meter=meter, log=log)
@@ -199,7 +203,18 @@ def run_pipeline(vod_url: str, cfg: dict, *, no_upload: bool, console: Console =
 
     console.rule("[bold]5/7 Fuse + refine")
     mx.stage("refine")
-    candidates = score_stage.fuse(text_moments, vision_frames, audio_sig, chat_sig, cfg)
+    targeted = vcfg.get("enabled", True) and vmode == "candidates"
+    if targeted:
+        pre = score_stage.fuse(text_moments, [], audio_sig, chat_sig, cfg)
+        try:
+            vision_frames = vision_stage.run_candidates(
+                media, work, [score_stage.peak_time(m, chat_sig, audio_sig) for m in pre],
+                cfg, meter=meter, log=log)
+        except Exception as e:  # noqa: BLE001
+            log(f"[yellow]vision signal failed ({type(e).__name__}: {e}) — continuing without it")
+            vision_frames = []
+    candidates = score_stage.fuse(text_moments, vision_frames, audio_sig, chat_sig, cfg,
+                                  spawn_video=not targeted)
     score_stage.save_moments(candidates, work / "candidates.json")
     log(f"{len(candidates)} fused candidates")
     moments = refine_stage.refine(candidates, segments, cfg, meter=meter, log=log)

@@ -58,6 +58,10 @@ audio:
 
 vision:
   enabled: true
+  # candidates: no frame grid. The picture is only checked at the candidates that
+  # speech, chat and audio found (3-frame bursts). The 8B vision model returned 0.0/0.1
+  # for all 685 grid frames of a 3-h stream in 30+ minutes; targeted it costs ~2 min.
+  mode: candidates
   interval_seconds: 15       # 6-h VOD → 1440 frames → 90 triage calls of 16 frames; 10 = prod value
   frame_width: 640
   triage_model: "claude-haiku-4-5"   # ignored under ollama (vision_model is used)
@@ -97,10 +101,11 @@ analyze:
 
 score:
   weights:
-    chat: 0.35
-    audio: 0.15
-    text: 0.20                 # local text model over-scores; rank calibration below keeps only its ordering
-    video: 0.30
+    # the spoken word leads, the picture only nudges (see vision.mode)
+    chat: 0.30
+    audio: 0.20
+    text: 0.40                 # local text model over-scores; rank calibration below keeps only its ordering
+    video: 0.10
   lead_seconds: 5
   candidate_factor: 3
   calibrate_text: rank       # percentile-rank the text scores across the VOD (0.3..1.0) instead of raw 0.8-0.9 everywhere

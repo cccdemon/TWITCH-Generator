@@ -63,6 +63,11 @@ audio:
 
 # Video signal — two-tier Claude Vision (Star Citizen is visual).
 vision:
+  # "grid" (default): score one frame every interval_seconds, then confirm hot clusters.
+  # "candidates": skip the grid, only look at the candidates found by speech, chat and
+  # audio (3-frame bursts at their peaks). Much cheaper; silent purely visual moments
+  # are no longer found on their own.
+  mode: grid
   enabled: true
   interval_seconds: 10       # grid frame every N seconds (explosions are short)
   frame_width: 640           # triage frames, downscaled to save tokens

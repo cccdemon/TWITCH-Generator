@@ -14,11 +14,16 @@ triage scores inside the window; unconfirmed frames are discounted.
 All model calls go through src/llm.py (provider anthropic | ollama). Under
 ollama both tiers and the facecam detector use `llm.ollama.vision_model`.
 
-Caches: frames/ (+meta.json), vision_triage.json, vision.json (final).
+`vision.mode: candidates` skips the grid: `run_candidates` judges bursts only at the
+peaks of candidates that speech, chat or audio already produced (see main.py).
+
+Caches: frames/ (+meta.json), vision_triage.json, vision.json (final),
+vision_candidates.json (candidates mode).
 """
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -210,6 +215,13 @@ def _call_batches(
     return ok
 
 
+def _label(v: Any) -> str:
+    """Short description from the model; a bare number is not one. Small local models
+    sometimes echo the score into the label, which then showed up as a clip title."""
+    s = str(v or "").strip()[:80]
+    return "" if re.fullmatch(r"[\d\s.,%+-]*", s) else s
+
+
 def _items(data: dict, key: str) -> list[dict]:
     return [it for it in (data.get(key) or []) if isinstance(it, dict)]
 
@@ -258,7 +270,7 @@ def triage_frames(
                 t=ts_by_index[idx],
                 scores={c: _clamp01(raw.get(c)) for c in categories},
                 visual_score=_clamp01(fr.get("visual_score")),
-                label=str(fr.get("label", ""))[:80],
+                label=_label(fr.get("label")),
             ))
     out.sort(key=lambda f: f.t)
     return out
@@ -318,7 +330,7 @@ def confirm_windows(
                 raw = {}
             out[idx] = (_clamp01(it.get("visual_score")),
                         {c: _clamp01(raw.get(c)) for c in categories},
-                        str(it.get("label", ""))[:80])
+                        _label(it.get("label")))
     return out
 
 
@@ -418,6 +430,48 @@ def _load_frames_cache(path: Path, params: dict) -> list[VisionFrame] | None:
 def _save_frames_cache(path: Path, params: dict, frames: list[VisionFrame]) -> None:
     path.write_text(json.dumps({"params": params, "data": [f.__dict__ for f in frames]},
                                ensure_ascii=False), encoding="utf-8")
+
+
+def run_candidates(source: Path, work: Path, peaks: list[float], cfg: dict,
+                   meter=None, log=print) -> list[VisionFrame]:
+    """Targeted mode (`vision.mode: candidates`): look only where speech, chat or
+    audio already point.
+
+    Each peak is judged as a 3-frame burst, a few bursts per call; there is no grid
+    triage. Returns one VisionFrame per answered peak. The spoken word finds the
+    moments, the picture only confirms or weakens them. Cached in
+    vision_candidates.json (rebuilt when the peaks or the model change).
+    """
+    v = cfg.get("vision", {})
+    categories = list(v.get("categories", ["action", "pvp", "explosion", "ship_damage", "landing", "bug"]))
+    model = llm.model_for("vision", cfg, v.get("model", "claude-sonnet-4-6"))
+    peaks = [round(float(p), 1) for p in peaks]
+    params = {"v": _CACHE_VERSION, "mode": "candidates", "model": model,
+              "burst_width": int(v.get("burst_width", 768)), "categories": categories, "peaks": peaks}
+    cache = work / "vision_candidates.json"
+    cached = _load_frames_cache(cache, params)
+    if cached is not None:
+        return cached
+    if not peaks:
+        return []
+    confirmed = confirm_windows(
+        source, work, peaks, model=model, categories=categories,
+        width=int(v.get("burst_width", 768)),
+        max_windows_per_call=int(v.get("max_windows_per_call", 4)),
+        concurrency=int(v.get("concurrency", 4)), cfg=cfg, meter=meter,
+    )
+    frames = [VisionFrame(peaks[i], res[1], round(res[0], 4), res[2])
+              for i, res in sorted(confirmed.items())]
+    thr = float(v.get("highlight_threshold", 0.5))
+    log(f"  vision: {len(peaks)} candidate bursts, {len(frames)} scored, "
+        f"{sum(1 for f in frames if f.visual_score >= thr)} above threshold")
+    mx = metrics.current()
+    if mx is not None:
+        mx.vision(frames=len(peaks), scored=len(frames),
+                  hot=sum(1 for f in frames if f.visual_score >= thr),
+                  bursts=len(peaks), confirmed=len(frames))
+    _save_frames_cache(cache, params, frames)
+    return frames
 
 
 def run(source: Path, work: Path, cfg: dict, meter=None, log=print) -> list[VisionFrame]:
