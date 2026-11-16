@@ -122,3 +122,24 @@ werden soll." Noch **nicht** umgesetzt, erst bestätigen lassen. Vorschlag:
   Bildbereiche bleiben danach änderbar (heute nur noch Kürzen).
 - Zu klären: Download-Knopf (Rohstück oder gerendert), Schalter in `config.yaml`
   (`clip.auto_render` gibt es schon als „gar nicht rendern"), Umgang mit alten Clips.
+
+## Stand 2026-11-16, nachmittags: „Rendern erst beim Posten" umgesetzt (Commit `3ba7246`)
+
+- `clip.render: on_post` (ClipBox an, Prod `auto`): Pipeline schneidet Rohstücke nach
+  `clips/raw/`, das Posten-Panel rendert. Details in CLAUDE.md und `deploy/local/README.md`.
+- Download-Knopf: gerenderter Clip, solange es keinen gibt das Rohstück; ist beides da,
+  zusätzlich ein Knopf „Rohstück".
+- Nebenfund mit großer Wirkung: Twitch-VODs sind fragmentierte MP4s, jeder ffmpeg-Aufruf
+  las zum Öffnen die ganze Datei (32 s bei 12 GB). `clip.make_seekable` schreibt den
+  Download einmal um.
+
+Gemessen auf der Box (VOD 2929825092): Umschreiben 97 s einmalig; Öffnen danach 0,5 s
+statt 32 s; Bild an gleicher Stelle identisch; Rohstück schneiden 0,6 bis 0,8 s
+(je rund 65 MB, erstes Bild identisch mit dem VOD); 20-s-Clip aus dem Rohstück rendern
+12,6 s statt vorher 43 s; Ausgabe 1080×1920, 60 fps, 4,3 Mbit/s.
+
+Für 2929825092 liegen Rohstücke zu beiden vorhandenen Clips. 2927733081 ist noch
+fragmentiert und ohne Rohstücke.
+
+Nicht geprüft: Bedienung im Browser (Rahmen ziehen, Panel-Ablauf, Karten-Abzeichen),
+und ein kompletter Pipeline-Lauf im Modus `on_post`.
