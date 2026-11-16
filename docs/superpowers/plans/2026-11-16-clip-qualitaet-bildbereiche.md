@@ -143,3 +143,23 @@ fragmentiert und ohne Rohstücke.
 
 Nicht geprüft: Bedienung im Browser (Rahmen ziehen, Panel-Ablauf, Karten-Abzeichen),
 und ein kompletter Pipeline-Lauf im Modus `on_post`.
+
+## Stand 2026-11-16, abends: Bild-Analyse gezielt, Sprache führt (Commit `9871381`)
+
+Auslöser: Frage, ob Aufteilen in Blöcke schneller wäre. Antwort nein (eine GPU, ein
+Modell zur Zeit). Der alte Lauf (VOD 2927733081, 2 h 51 min) brauchte 61 min, davon
+über 30 min Bild-Raster, das für alle 685 Bilder 0,0/0,1 lieferte.
+
+- `vision.mode: candidates` auf der Box: Bild nur noch an den Kandidaten aus Sprache,
+  Chat, Ton. Gewichte Text 0,40 / Chat 0,30 / Ton 0,20 / Bild 0,10.
+- Extrahieren dekodiert im neuen Modus nur Ton.
+
+Kompletter Testlauf desselben VODs auf einer Kopie (ohne Download): **14,3 min** statt
+51,5 min (61 min minus 9,5 min Download). Umschreiben 1,2 / Extrahieren 0,3 /
+Signale 3,8 (Whisper 45-fache Echtzeit) / Text-Analyse 4,5 / Bild-Stöße + Auswahl 4,4 /
+Rohstücke 0,1 min. Bild: 30 Stöße, 0 über der Schwelle.
+
+Auswahl: 10 Momente, 4 davon wie vorher, 6 neu; alle aus dem Transkript, keiner aus
+einer Chat-Spitze. Ob die Auswahl besser ist, muss der User beurteilen. Ergebnis liegt
+auf der Box unter `data/_test/2927733081/` (Momente, Kandidaten, 10 Rohstücke), nicht
+in der Oberfläche sichtbar.
