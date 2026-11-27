@@ -126,7 +126,21 @@ def download_vod(info: VodInfo, out_dir: Path, fmt: str = "best", reuse: bool = 
         "-o", str(target),
         info.url,
     ]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        # Twitch serves some VODs as fMP4 HLS with several init segments
+        # (#EXT-X-MAP again after #EXT-X-DISCONTINUITY, e.g. a stream
+        # reconnect). yt-dlp's native HLS downloader refuses those
+        # ("Initialization fragment found after media fragments"); ffmpeg reads
+        # them and keeps the playlist timeline, so chat offsets still match.
+        print("yt-dlp native download failed, retrying with the ffmpeg downloader "
+              "(no resume, quiet until done)", flush=True)
+        for leftover in out_dir.glob(f"{info.vod_id}.*.part"):
+            leftover.unlink(missing_ok=True)
+        for leftover in out_dir.glob(f"{info.vod_id}.*.ytdl"):
+            leftover.unlink(missing_ok=True)
+        subprocess.run(cmd[:1] + ["--downloader", "ffmpeg"] + cmd[1:], check=True)
     if not target.exists():
         # yt-dlp may keep source container; grab whatever it produced.
         matches = list(out_dir.glob(f"{info.vod_id}.*"))
