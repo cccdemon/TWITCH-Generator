@@ -1,0 +1,12 @@
+[Unit]
+Description=adb server for clip-poster (owns the USB phone)
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/adb start-server
+ExecStop=/usr/bin/adb kill-server
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

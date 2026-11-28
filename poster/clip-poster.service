@@ -1,0 +1,22 @@
+[Unit]
+Description=clip-poster (posts clips to TikTok/Instagram via the USB phone)
+After=network-online.target adb-server.service
+Wants=adb-server.service
+
+[Service]
+User=clipposter
+Group=clipposter
+WorkingDirectory=/opt/clip-poster
+EnvironmentFile=/opt/clip-poster/.env
+Environment=DATA_DIR=/opt/clip-poster/data TZ=Europe/Berlin
+ExecStart=/opt/clip-poster/.venv/bin/uvicorn app.main:app --host ${BIND_ADDR} --port ${PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/clip-poster/data
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
